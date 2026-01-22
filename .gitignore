@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.venv/
+ENV/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Uploads and generated files
+uploads/
+*.pdf
+temp_audio.wav
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Frontend build
+frontend/dist/
+frontend/node_modules/
+
+# Backend cache
+backend/__pycache__/
+backend/venv/
+backend/uploads/
