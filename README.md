@@ -7,12 +7,19 @@
 ## 📋 Table of Contents
 
 1. [Executive Summary](#executive-summary)
-2. [System Architecture](#system-architecture)
-3. [Pipeline Flow & Algorithm Overview](#pipeline-flow--algorithm-overview)
-4. [Detailed Module Algorithms](#detailed-module-algorithms)
-5. [Score Aggregation & Final Evaluation](#score-aggregation--final-evaluation)
-6. [Key Features](#key-features)
-7. [Installation & Setup](#installation--setup)
+2. [Installation & Setup](#installation--setup)
+   - [System Requirements](#-system-requirements)
+   - [Step 1 — Install System Dependencies](#step-1--install-system-dependencies)
+   - [Step 2 — Clone the Repository](#step-2--clone-the-repository)
+   - [Step 3 — Backend Setup](#step-3--backend-setup)
+   - [Step 4 — Frontend Setup](#step-4--frontend-setup)
+   - [Step 5 — Verify Everything Works](#step-5--verify-everything-works)
+   - [Troubleshooting](#️-troubleshooting)
+3. [System Architecture](#system-architecture)
+4. [Pipeline Flow & Algorithm Overview](#pipeline-flow--algorithm-overview)
+5. [Detailed Module Algorithms](#detailed-module-algorithms)
+6. [Score Aggregation & Final Evaluation](#score-aggregation--final-evaluation)
+7. [Key Features](#key-features)
 8. [Usage Guide](#usage-guide)
 9. [Technology Stack](#technology-stack)
 10. [Performance & Limitations](#performance--limitations)
@@ -31,6 +38,309 @@
 - **Soft Skills Assessment**: Communication, confidence, engagement, professionalism
 
 **Output**: Comprehensive evaluation score (0-100) with detailed feedback, PDF reports, and improvement tracking.
+
+---
+
+## 🚀 Installation & Setup
+
+> **Supports**: Windows 10/11 · macOS 12+ · Ubuntu 20.04+
+
+---
+
+### **📋 System Requirements**
+
+| Requirement | Minimum | Recommended |
+|---|---|---|
+| **OS** | Windows 10, macOS 12, Ubuntu 20.04 | Latest stable version |
+| **Python** | 3.10 | 3.11 |
+| **Node.js** | 18.x | 20.x (LTS) |
+| **RAM** | 8 GB | 16 GB |
+| **Storage** | 5 GB free | 10 GB free |
+| **GPU** | — | NVIDIA CUDA (speeds up ML) |
+
+You will also need:
+- An **OpenAI API Key** (required – for Whisper audio transcription)
+- **FFmpeg** installed on your system (required for audio extraction from video)
+- **PostgreSQL 15+** (optional – uses SQLite-compatible fallback if not configured)
+
+---
+
+### **Step 1 — Install System Dependencies**
+
+#### 🪟 Windows
+
+1. **Python 3.10+**
+   - Download from [python.org/downloads](https://www.python.org/downloads/)
+   - ✅ During install, check **"Add Python to PATH"**
+   - Verify: open **Command Prompt (cmd)** and run:
+     ```cmd
+     python --version
+     pip --version
+     ```
+
+2. **Node.js 18+ (LTS)**
+   - Download from [nodejs.org](https://nodejs.org/)
+   - Verify:
+     ```cmd
+     node --version
+     npm --version
+     ```
+
+3. **FFmpeg**
+   - Download from [ffmpeg.org/download.html](https://ffmpeg.org/download.html) (get the Windows build)
+   - Extract the zip, then add the `bin` folder to your system PATH:
+     - Search → *Edit environment variables* → *Path* → *New* → paste path to `ffmpeg\bin`
+   - Verify:
+     ```cmd
+     ffmpeg -version
+     ```
+
+4. **Git** (to clone the repo)
+   - Download from [git-scm.com](https://git-scm.com/download/win)
+
+---
+
+#### 🍎 macOS
+
+Using **Homebrew** ([brew.sh](https://brew.sh)):
+
+```bash
+# Install Homebrew if you don't have it
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install Python, Node.js, FFmpeg, Git
+brew install python@3.11 node ffmpeg git
+
+# Verify
+python3 --version
+node --version
+ffmpeg -version
+```
+
+---
+
+#### 🐧 Ubuntu / Debian Linux
+
+```bash
+sudo apt update && sudo apt upgrade -y
+
+# Python 3.11
+sudo apt install -y python3.11 python3.11-venv python3-pip
+
+# Node.js 20 LTS (via NodeSource)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# FFmpeg & Git
+sudo apt install -y ffmpeg git
+
+# Verify
+python3.11 --version
+node --version
+ffmpeg -version
+```
+
+---
+
+### **Step 2 — Clone the Repository**
+
+```bash
+git clone https://github.com/amogh330/VISUMEAI-V2.git
+cd VISUMEAI-V2
+```
+
+---
+
+### **Step 3 — Backend Setup**
+
+Navigate into the `backend` folder:
+
+```bash
+cd backend
+```
+
+#### 3a — Create & Activate a Virtual Environment
+
+**Windows (cmd / PowerShell):**
+```cmd
+python -m venv venv
+venv\Scripts\activate
+```
+
+**macOS / Linux:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+> 💡 Your terminal prompt will show `(venv)` when the environment is active.  
+> To deactivate later, just run `deactivate`.
+
+---
+
+#### 3b — Install Python Dependencies
+
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+> ⚠️ This installs PyTorch, MediaPipe, spaCy, and other heavy ML libraries.  
+> Expect this to take **5–15 minutes** on first run depending on your internet speed.  
+> If you have an NVIDIA GPU, see the [PyTorch CUDA install guide](https://pytorch.org/get-started/locally/) for GPU-accelerated builds.
+
+---
+
+#### 3c — Download the spaCy Language Model
+
+```bash
+python -m spacy download en_core_web_sm
+```
+
+---
+
+#### 3d — Configure Environment Variables
+
+Copy the example file and fill in your values:
+
+**Windows:**
+```cmd
+copy .env.example .env
+```
+
+**macOS / Linux:**
+```bash
+cp .env.example .env
+```
+
+Now open `backend/.env` in any text editor and update the values:
+
+```env
+# ──────────────────────────────────────────
+# API Server
+# ──────────────────────────────────────────
+API_HOST=0.0.0.0
+API_PORT=8000
+DEBUG=True
+
+# ──────────────────────────────────────────
+# Security  (change this in production!)
+# ──────────────────────────────────────────
+SECRET_KEY=your-secret-key-change-me
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# ──────────────────────────────────────────
+# OpenAI  (REQUIRED for transcription)
+# ──────────────────────────────────────────
+OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+
+# ──────────────────────────────────────────
+# Llama (OPTIONAL – local AI feedback)
+# ──────────────────────────────────────────
+LLAMA_API_KEY=your-llama-api-key
+LLAMA_API_URL=http://localhost:11434/api/generate
+
+# ──────────────────────────────────────────
+# Database  (leave blank to use default SQLite)
+# ──────────────────────────────────────────
+DATABASE_URL=postgresql://user:password@localhost:5432/visumeai
+
+# ──────────────────────────────────────────
+# File Storage
+# ──────────────────────────────────────────
+UPLOAD_DIR=./uploads
+MAX_UPLOAD_SIZE=104857600   # 100 MB
+
+# ──────────────────────────────────────────
+# CORS  (add your frontend URL)
+# ──────────────────────────────────────────
+CORS_ORIGINS=["http://localhost:3000", "http://localhost:5173"]
+
+# ──────────────────────────────────────────
+# spaCy Model
+# ──────────────────────────────────────────
+SPACY_MODEL=en_core_web_sm
+```
+
+> 🔑 **Where to get your OpenAI API Key:** Sign in at [platform.openai.com/api-keys](https://platform.openai.com/api-keys) and create a new secret key.
+
+---
+
+#### 3e — Start the Backend Server
+
+```bash
+# Option A – using the startup script
+python main.py
+
+# Option B – using Uvicorn directly (supports hot-reload)
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+✅ The API will be available at: **http://localhost:8000**  
+✅ Interactive API docs (Swagger UI): **http://localhost:8000/docs**
+
+---
+
+### **Step 4 — Frontend Setup**
+
+Open a **new terminal window** (keep the backend running), then:
+
+```bash
+cd frontend
+
+# Install all Node.js dependencies
+npm install
+
+# Start the Vite development server
+npm run dev
+```
+
+✅ The app will open at: **http://localhost:5173**
+
+---
+
+### **Step 5 — Verify Everything Works**
+
+1. Open **http://localhost:5173** in your browser.
+2. You should see the VisumeAI landing page.
+3. Navigate to the **Recruiter Dashboard** and create a test job posting.
+4. Navigate to the **Candidate Page**, fill in your name, select the job, and upload a short test video + PDF resume.
+5. Click **Evaluate** — the pipeline should run and return a score within ~30–70 seconds.
+
+---
+
+### **🗂️ Project Structure Overview**
+
+```
+VISUMEAI-V2/
+├── backend/
+│   ├── main.py            ← FastAPI entry point
+│   ├── requirements.txt   ← Python dependencies
+│   ├── .env               ← Your environment config (create this)
+│   ├── .env.example       ← Template for .env
+│   └── app/               ← Core modules (routes, pipelines, models)
+│       └── uploads/       ← Uploaded files stored here
+└── frontend/
+    ├── package.json       ← Node dependencies
+    ├── vite.config.js     ← Vite configuration
+    └── src/               ← React source code
+```
+
+---
+
+### **🛠️ Troubleshooting**
+
+| Problem | Solution |
+|---|---|
+| `python` not found on Windows | Use `python3` instead, or re-install Python with PATH enabled |
+| `pip install` fails on `mediapipe` | Ensure Python ≤ 3.11; mediapipe doesn't support 3.12+ yet |
+| `ffmpeg not found` error | FFmpeg is not in your PATH – see Step 1 |
+| `OPENAI_API_KEY` error | Check your `.env` file is in the `backend/` folder |
+| Port 8000 already in use | Run `uvicorn main:app --port 8001` and update frontend API URL |
+| spaCy model not found | Run `python -m spacy download en_core_web_sm` inside your venv |
+| `npm install` fails | Delete `node_modules/` and `package-lock.json`, then retry |
+| CORS errors in browser | Add your frontend URL to `CORS_ORIGINS` in `backend/.env` |
 
 ---
 
@@ -629,66 +939,6 @@ overall_score = (
 - Animated backgrounds and hover effects
 - Glass morphism navigation
 - Responsive design
-
----
-
-## 🚀 Installation & Setup
-
-### **Prerequisites**
-- Python 3.10+
-- Node.js 16+
-- OpenAI API Key (for Whisper transcription)
-- Optional: Llama 3.2 API (for enhanced feedback)
-
-### **Backend Setup**
-
-```bash
-cd backend
-
-# Create virtual environment
-python -m venv venv
-
-# Activate (Windows)
-venv\Scripts\activate
-# Activate (Linux/Mac)
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Download spaCy model
-python -m spacy download en_core_web_sm
-
-# Create .env file
-echo "OPENAI_API_KEY=your_key_here" > .env
-echo "LLAMA_API_URL=http://localhost:11434/api/generate" >> .env
-
-# Run server
-python main.py
-# Or: uvicorn main:app --reload --port 8000
-```
-
-### **Frontend Setup**
-
-```bash
-cd frontend
-
-# Install dependencies
-npm install
-
-# Run development server
-npm run dev
-```
-
-### **Environment Variables**
-
-Create `backend/.env`:
-```env
-OPENAI_API_KEY=sk-your-openai-key
-LLAMA_API_URL=http://localhost:11434/api/generate  # Optional
-SPACY_MODEL=en_core_web_sm
-UPLOAD_DIR=./uploads
-```
 
 ---
 
