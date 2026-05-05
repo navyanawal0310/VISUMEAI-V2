@@ -14,7 +14,7 @@ function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/candidate" element={<CandidatePage />} />
           <Route path="/recruiter" element={<RecruiterDashboard />} />
-          <Route path="/evaluation/:id" element={<EvaluationPage />} />
+          <Route path="/evaluation" element={<EvaluationPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Layout>

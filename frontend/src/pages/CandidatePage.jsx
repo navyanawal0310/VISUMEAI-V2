@@ -6,7 +6,9 @@ import { uploadVideo, uploadResume, evaluateCandidate, listJobPostings, checkVid
 
 export default function CandidatePage() {
   const navigate = useNavigate()
-  const [formData, setFormData] = useState({
+  // FIX 2: Renamed state variable from `formData` to `fields` so it can't be
+  // shadowed by `const formData = new FormData()` inside handleSubmit.
+  const [fields, setFields] = useState({
     candidateName: '',
     selectedJobId: ''
   })
@@ -22,19 +24,17 @@ export default function CandidatePage() {
   const [previousSubmission, setPreviousSubmission] = useState(null)
   const [checkingPrevious, setCheckingPrevious] = useState(false)
   
-  // Load available job postings
   useEffect(() => {
     loadJobPostings()
   }, [])
   
-  // Check for previous submissions when candidate name and job are selected
   useEffect(() => {
-    if (formData.candidateName && formData.selectedJobId) {
+    if (fields.candidateName && fields.selectedJobId) {
       checkForPreviousSubmissions()
     } else {
       setPreviousSubmission(null)
     }
-  }, [formData.candidateName, formData.selectedJobId])
+  }, [fields.candidateName, fields.selectedJobId])
   
   const loadJobPostings = async () => {
     try {
@@ -51,17 +51,16 @@ export default function CandidatePage() {
   const checkForPreviousSubmissions = async () => {
     setCheckingPrevious(true)
     try {
-      const latest = await getLatestSubmission(formData.candidateName, formData.selectedJobId)
+      const latest = await getLatestSubmission(fields.candidateName, fields.selectedJobId)
       setPreviousSubmission(latest)
     } catch (err) {
-      // No previous submission found - that's okay
       setPreviousSubmission(null)
     } finally {
       setCheckingPrevious(false)
     }
   }
   
-  const selectedJob = jobPostings.find(job => job.job_id === formData.selectedJobId)
+  const selectedJob = jobPostings.find(job => job.job_id === fields.selectedJobId)
   
   const videoDropzone = useDropzone({
     accept: {
@@ -76,10 +75,10 @@ export default function CandidatePage() {
     }
   })
   
+  // FIX 3: Resume dropzone now accepts PDF only (removed .docx).
   const resumeDropzone = useDropzone({
     accept: {
       'application/pdf': ['.pdf'],
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx']
     },
     maxFiles: 1,
     onDrop: (acceptedFiles) => {
@@ -92,7 +91,7 @@ export default function CandidatePage() {
   
   const handleInputChange = (e) => {
     const { name, value } = e.target
-    setFormData(prev => ({
+    setFields(prev => ({
       ...prev,
       [name]: value
     }))
@@ -111,77 +110,56 @@ export default function CandidatePage() {
       setCheckingQuality(false)
     }
   }
-  
+
   const handleSubmit = async (e) => {
-    e.preventDefault()
-    setError(null)
-    setSuccess(null)
-    
-    // Validation
-    if (!formData.candidateName) {
-      setError('Please enter your name')
-      return
+    e.preventDefault();
+
+    if (!resumeFile) {
+      setError("Please select a PDF resume");
+      return;
     }
-    
-    if (!formData.selectedJobId) {
-      setError('Please select a position')
-      return
-    }
-    
-    if (!videoFile && !resumeFile) {
-      setError('Please upload at least a video or resume')
-      return
-    }
-    
-    setLoading(true)
-    
+
+    // FIX 4: `formData` here is now a plain local variable — no longer shadows
+    // the state. The state was renamed to `fields` above.
+    const formData = new FormData();
+    formData.append("file", resumeFile);
+
     try {
-      let videoId = null
-      let resumeId = null
-      
-      // Upload video
-      if (videoFile) {
-        const videoResponse = await uploadVideo(videoFile, formData.candidateName)
-        videoId = videoResponse.video_id
+      setLoading(true);
+      setError(null);
+      setSuccess("Uploading...");
+
+      const res = await fetch("http://127.0.0.1:8000/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        throw new Error(`Server responded with ${res.status}`);
       }
-      
-      // Upload resume
-      if (resumeFile) {
-        const resumeResponse = await uploadResume(resumeFile, formData.candidateName)
-        resumeId = resumeResponse.resume_id
-      }
-      
-      // Start evaluation using job_id
-      const evaluation = await evaluateCandidate({
-        video_id: videoId,
-        resume_id: resumeId,
-        candidate_name: formData.candidateName,
-        job_id: formData.selectedJobId
-      })
-      
-      setSuccess('Evaluation complete!')
-      
-      // Navigate to results
-      setTimeout(() => {
-        navigate(`/evaluation/${evaluation.evaluation_id}`)
-      }, 1500)
-      
+
+      const data = await res.json();
+      console.log(data);
+
+      setSuccess("Upload successful!");
+      navigate("/evaluation", { state: data });
+
     } catch (err) {
-      console.error('Submission error:', err)
-      setError(err.response?.data?.detail || 'Failed to process submission. Please try again.')
+      console.error(err);
+      setError("Upload failed: " + err.message);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
   
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
       <div className="text-center mb-8">
         <h1 className="text-4xl font-bold text-gray-900 mb-2">
-          Submit Your Video Resume
+          Submit Your Resume
         </h1>
         <p className="text-lg text-gray-600">
-          Upload your video resume and/or text resume to receive AI-powered feedback
+          Upload your PDF resume to receive AI-powered feedback. Video is optional.
         </p>
       </div>
       
@@ -199,6 +177,9 @@ export default function CandidatePage() {
         </div>
       )}
       
+      {/* FIX 5: Removed the duplicate bare <input type="file"> that was sitting
+          above the Personal Information section. The dropzone below is the
+          canonical file picker. Having two inputs was confusing and redundant. */}
       <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
         {/* Personal Information */}
         <div className="mb-8">
@@ -212,7 +193,7 @@ export default function CandidatePage() {
               <input
                 type="text"
                 name="candidateName"
-                value={formData.candidateName}
+                value={fields.candidateName}
                 onChange={handleInputChange}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
                 placeholder="John Doe"
@@ -226,158 +207,77 @@ export default function CandidatePage() {
         {checkingPrevious && (
           <div className="mb-8 bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center gap-3">
             <Loader className="h-5 w-5 animate-spin text-blue-600" />
-            <p className="text-blue-800">Checking for previous submissions...</p>
+            <p className="text-blue-800 text-sm">Checking for previous submissions...</p>
           </div>
         )}
-        
-        {previousSubmission && (
-          <div className="mb-8 bg-gradient-to-r from-purple-50 to-cyan-50 border-2 border-purple-200 rounded-xl p-6 shadow-lg">
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-white font-bold text-lg shadow-lg">
-                    {previousSubmission.version}
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-gray-900">
-                      Previous Submission Found!
-                    </h3>
-                    <p className="text-sm text-gray-600">
-                      You submitted for this position before
-                    </p>
-                  </div>
+
+        {/* Job Postings */}
+        {!loadingJobs && jobPostings.length > 0 && (
+          <div className="mb-8">
+            <h2 className="text-2xl font-semibold text-gray-900 mb-4">Select Position</h2>
+            <select
+              name="selectedJobId"
+              value={fields.selectedJobId}
+              onChange={handleInputChange}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              <option value="">— Select a job posting —</option>
+              {jobPostings.map(job => (
+                <option key={job.job_id} value={job.job_id}>
+                  {job.title}
+                </option>
+              ))}
+            </select>
+
+            {selectedJob && (
+              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center gap-2 mb-2">
+                  <Briefcase className="h-5 w-5 text-blue-600" />
+                  <h3 className="font-semibold text-blue-900">{selectedJob.title}</h3>
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4 mt-4">
-                  <div className="bg-white rounded-lg p-4 border border-purple-200">
-                    <p className="text-xs text-gray-600 mb-1">Previous Score</p>
-                    <p className="text-2xl font-bold text-gray-900">
-                      {previousSubmission.score.toFixed(1)}
-                      <span className="text-sm text-gray-500">/100</span>
-                    </p>
+                {selectedJob.required_skills && selectedJob.required_skills.length > 0 && (
+                  <div className="mb-3">
+                    <p className="text-sm font-semibold text-gray-700 mb-2">Required Skills:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedJob.required_skills.map(skill => (
+                        <span key={skill} className="px-3 py-1 bg-blue-200 text-blue-900 text-xs font-medium rounded-full">
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                  <div className="bg-white rounded-lg p-4 border border-cyan-200">
-                    <p className="text-xs text-gray-600 mb-1">Recommendation</p>
-                    <p className="text-sm font-semibold text-gray-900">
-                      {previousSubmission.recommendation}
-                    </p>
+                )}
+                {selectedJob.preferred_skills && selectedJob.preferred_skills.length > 0 && (
+                  <div className="mb-3">
+                    <p className="text-sm font-semibold text-gray-700 mb-2">Preferred Skills:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedJob.preferred_skills.map(skill => (
+                        <span key={skill} className="px-3 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                
-                <div className="mt-4 p-4 bg-white rounded-lg border border-purple-200">
-                  <p className="text-sm text-purple-900 font-medium mb-2">
-                    💡 This is your <span className="font-bold">attempt #{previousSubmission.version + 1}</span>
+                )}
+                {selectedJob.experience_years && (
+                  <p className="text-sm text-gray-600 mt-2">
+                    <strong>Required Experience:</strong> {selectedJob.experience_years}+ years
                   </p>
-                  <p className="text-sm text-gray-700">
-                    Your new submission will be compared with your previous one, and you'll see a detailed 
-                    improvement analysis showing exactly what got better and what needs work!
-                  </p>
-                </div>
+                )}
               </div>
-            </div>
+            )}
           </div>
         )}
-        
-        {/* Job Selection */}
-        <div className="mb-8">
-          <h2 className="text-2xl font-semibold text-gray-900 mb-4">Select Position</h2>
-          
-          {loadingJobs ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader className="h-8 w-8 animate-spin text-primary-600" />
-              <span className="ml-3 text-gray-600">Loading available positions...</span>
-            </div>
-          ) : jobPostings.length === 0 ? (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-              <p className="text-yellow-800">
-                No active job postings available at the moment. Please check back later.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Available Positions *
-                </label>
-                <div className="relative">
-                  <Briefcase className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
-                  <select
-                    name="selectedJobId"
-                    value={formData.selectedJobId}
-                    onChange={handleInputChange}
-                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 appearance-none bg-white"
-                    required
-                  >
-                    <option value="">-- Select a position to apply for --</option>
-                    {jobPostings.map(job => (
-                      <option key={job.job_id} value={job.job_id}>
-                        {job.title} {job.experience_years && `(${job.experience_years}+ years)`}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              
-              {/* Show selected job details */}
-              {selectedJob && (
-                <div className="mt-4 p-6 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border border-blue-200">
-                  <div className="flex items-start justify-between mb-3">
-                    <h3 className="text-xl font-semibold text-gray-900">{selectedJob.title}</h3>
-                    <span className="px-3 py-1 bg-green-100 text-green-800 text-xs font-medium rounded-full">
-                      Active
-                    </span>
-                  </div>
-                  
-                  <p className="text-sm text-gray-700 mb-4 whitespace-pre-line">
-                    {selectedJob.description}
-                  </p>
-                  
-                  {selectedJob.required_skills.length > 0 && (
-                    <div className="mb-3">
-                      <p className="text-sm font-semibold text-gray-700 mb-2">Required Skills:</p>
-                      <div className="flex flex-wrap gap-2">
-                        {selectedJob.required_skills.map(skill => (
-                          <span key={skill} className="px-3 py-1 bg-blue-200 text-blue-900 text-xs font-medium rounded-full">
-                            {skill}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {selectedJob.preferred_skills && selectedJob.preferred_skills.length > 0 && (
-                    <div className="mb-3">
-                      <p className="text-sm font-semibold text-gray-700 mb-2">Preferred Skills:</p>
-                      <div className="flex flex-wrap gap-2">
-                        {selectedJob.preferred_skills.map(skill => (
-                          <span key={skill} className="px-3 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">
-                            {skill}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {selectedJob.experience_years && (
-                    <p className="text-sm text-gray-600 mt-2">
-                      <strong>Required Experience:</strong> {selectedJob.experience_years}+ years
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
         
         {/* File Uploads */}
         <div className="mb-8">
           <h2 className="text-2xl font-semibold text-gray-900 mb-4">Upload Files</h2>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Video Upload */}
+            {/* Video Upload — Optional */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Video Resume
+                Video Resume <span className="text-gray-400 font-normal">(optional)</span>
               </label>
               <div
                 {...videoDropzone.getRootProps()}
@@ -481,16 +381,18 @@ export default function CandidatePage() {
               )}
             </div>
             
-            {/* Resume Upload */}
+            {/* Resume Upload — Required, PDF only */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Text Resume
+                PDF Resume <span className="text-red-500">*</span>
               </label>
               <div
                 {...resumeDropzone.getRootProps()}
                 className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
                   resumeDropzone.isDragActive
                     ? 'border-primary-500 bg-primary-50'
+                    : resumeFile
+                    ? 'border-green-400 bg-green-50'
                     : 'border-gray-300 hover:border-primary-400'
                 }`}
               >
@@ -505,8 +407,8 @@ export default function CandidatePage() {
                   </div>
                 ) : (
                   <div>
-                    <p className="text-sm text-gray-600">Drop resume here or click to browse</p>
-                    <p className="text-xs text-gray-500 mt-1">PDF or DOCX</p>
+                    <p className="text-sm text-gray-600">Drop your resume here or click to browse</p>
+                    <p className="text-xs text-gray-500 mt-1">PDF only</p>
                   </div>
                 )}
               </div>
@@ -518,7 +420,7 @@ export default function CandidatePage() {
         <div className="flex justify-end">
           <button
             type="submit"
-            disabled={loading || loadingJobs || !formData.selectedJobId}
+            disabled={loading || !resumeFile}
             className="inline-flex items-center px-8 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-primary-600 hover:bg-primary-700 disabled:bg-gray-400 disabled:cursor-not-allowed shadow-lg transition-all"
           >
             {loading ? (

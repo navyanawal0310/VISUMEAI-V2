@@ -1,6 +1,7 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
 import { Video, FileText, Target, BarChart, CheckCircle, Zap, Sparkles, TrendingUp } from 'lucide-react'
+import UploadResume from "../components/UploadResume";
 
 export default function HomePage() {
   const features = [

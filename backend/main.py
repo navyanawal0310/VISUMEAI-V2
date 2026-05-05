@@ -1,4 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
+import uuid
+import os
+from app.services.resume_parser import ResumeParser
+from app.services.role_matcher import RoleMatcher
+from app.models.schemas import JobDescription
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import logging
@@ -58,6 +63,57 @@ async def startup_event():
             logger.warning(f"python -m spacy download {settings.SPACY_MODEL}")
     except ImportError:
         logger.warning("spaCy not installed")
+
+# Upload directory setup
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+@app.post("/upload")
+async def upload(file: UploadFile = File(...)):
+    try:
+        # ✅ Save file
+        file_id = str(uuid.uuid4())
+        file_path = os.path.join(UPLOAD_DIR, f"{file_id}_{file.filename}")
+
+        content = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        # ✅ Parse resume
+        parser = ResumeParser()
+        parsed = await parser.parse_resume(file_path, file_id)
+
+        print("PARSED DATA:", parsed)  # 🔥 debug
+
+        # ✅ Temporary Job Description
+        job = JobDescription(
+            title="Data Scientist",
+            description="Looking for Python, SQL, Machine Learning experience",
+            required_skills=["python", "sql", "machine learning"],
+            preferred_skills=["pytorch", "tensorflow"],
+            experience_years=2
+        )
+
+        # ✅ Match role
+        matcher = RoleMatcher()
+        match = await matcher.match_role(
+            job_description=job,
+            resume_analysis=parsed
+        )
+
+        print("MATCH RESULT:", match)  # 🔥 debug
+
+        # ✅ Return response (IMPORTANT: match frontend keys)
+        return {
+            "score": round(match.match_percentage, 2),   # ← frontend expects this
+            "skills": match.matching_skills,
+            "missing_skills": match.missing_skills,
+            "feedback": ", ".join(match.gaps) if match.gaps else "Strong profile"
+        }
+
+    except Exception as e:
+        print("ERROR:", str(e))
+        return {"error": str(e)}
 
 @app.on_event("shutdown")
 async def shutdown_event():
