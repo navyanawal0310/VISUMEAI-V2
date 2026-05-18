@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import {
-  Loader, AlertCircle, Download, ArrowLeft,
-  CheckCircle, XCircle, TrendingUp, Video,
-  MessageSquare, Award
+  Loader, AlertCircle, ArrowLeft
 } from 'lucide-react'
 import {
   BarChart, Bar, RadarChart, Radar, PolarGrid,
@@ -20,34 +18,26 @@ export default function EvaluationPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  // 🚀 CORE FIX: HANDLE BOTH CASES
   useEffect(() => {
-
     console.log("LOCATION STATE:", passedData)
 
-    // CASE 1: Came from submit
     if (passedData) {
       setEvaluation(passedData)
       setLoading(false)
       return
     }
 
-    // CASE 2: Page refresh → fallback
     const lastData = localStorage.getItem("evaluation")
-
     if (lastData) {
       setEvaluation(JSON.parse(lastData))
       setLoading(false)
       return
     }
 
-    // CASE 3: Nothing available
     setError("No evaluation data found. Please upload again.")
     setLoading(false)
-
   }, [passedData])
 
-  // 🔥 Save data for refresh
   useEffect(() => {
     if (passedData) {
       localStorage.setItem("evaluation", JSON.stringify(passedData))
@@ -69,24 +59,31 @@ export default function EvaluationPage() {
         <AlertCircle className="mx-auto mb-4 text-red-500" size={40} />
         <h2 className="text-lg font-semibold mb-2">Something went wrong</h2>
         <p className="text-gray-600 mb-4">{error}</p>
-
-        <Link
-          to="/candidate"
-          className="px-4 py-2 bg-blue-600 text-white rounded"
-        >
+        <Link to="/candidate" className="px-4 py-2 bg-blue-600 text-white rounded">
           Go Back
         </Link>
       </div>
     )
   }
 
-  // ---------- SAFE DATA ----------
+  console.log(JSON.stringify(evaluation, null, 2))
+
+  // ---------- FIXED: use correct API field names ----------
+  // API returns: score, skills, missing_skills, feedback, soft_skill_index
+  const overallScore = evaluation.score ?? evaluation.overall_score ?? 0
+
   const scoreData = [
-  { name: 'Technical', score: evaluation.overall_score || 0 },
-  { name: 'Soft Skills', score: 0 },
-  { name: 'Video', score: 0 },
-  { name: 'Overall', score: evaluation.overall_score || 0 }
-]
+    { name: 'Technical', score: overallScore },
+    {
+      name: 'Soft Skills',
+      score: evaluation.soft_skill_index
+        ? (Object.values(evaluation.soft_skill_index).reduce((a, b) => a + b, 0) /
+            Object.values(evaluation.soft_skill_index).length) * 100
+        : 0
+    },
+    { name: 'Video', score: evaluation.video_score ?? 0 },
+    { name: 'Overall', score: overallScore }
+  ]
 
   const softSkillData = evaluation.soft_skill_index ? [
     { skill: 'Communication', value: evaluation.soft_skill_index.communication * 100 },
@@ -101,7 +98,11 @@ export default function EvaluationPage() {
     return { text: 'Needs Work', color: 'bg-red-500' }
   }
 
-  const badge = getScoreBadge(evaluation.overall_score || 0)
+  const badge = getScoreBadge(overallScore)
+
+  // FIXED: API uses "skills" for matched skills (not "skills_matched")
+  const matchedSkills = evaluation.skills ?? evaluation.skills_matched ?? []
+  const missingSkills = evaluation.missing_skills ?? []
 
   // ---------- UI ----------
   return (
@@ -112,7 +113,6 @@ export default function EvaluationPage() {
         <Link to="/candidate" className="flex items-center text-blue-600">
           <ArrowLeft className="mr-2" size={16} /> Back
         </Link>
-
         <div className={`px-4 py-2 text-white rounded ${badge.color}`}>
           {badge.text}
         </div>
@@ -123,37 +123,35 @@ export default function EvaluationPage() {
       </h1>
 
       <p className="text-gray-600 mb-6">
-        Overall Score: <strong>{evaluation.overall_score?.toFixed(1) || 0}/100</strong>
+        Overall Score: <strong>{overallScore.toFixed(1)}/100</strong>
       </p>
 
       {/* CHARTS */}
       <div className="grid md:grid-cols-2 gap-6">
 
-        {/* BAR */}
+        {/* BAR CHART */}
         <div className="bg-white p-4 rounded shadow">
           <h2 className="mb-3 font-semibold">Score Breakdown</h2>
-
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={scoreData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip />
+              <YAxis domain={[0, 100]} />
+              <Tooltip formatter={(value) => `${value.toFixed(1)}`} />
               <Bar dataKey="score" fill="#3b82f6" />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        {/* RADAR */}
+        {/* RADAR CHART */}
         {softSkillData.length > 0 && (
           <div className="bg-white p-4 rounded shadow">
             <h2 className="mb-3 font-semibold">Soft Skills</h2>
-
             <ResponsiveContainer width="100%" height={250}>
               <RadarChart data={softSkillData}>
                 <PolarGrid />
                 <PolarAngleAxis dataKey="skill" />
-                <PolarRadiusAxis />
+                <PolarRadiusAxis domain={[0, 100]} />
                 <Radar dataKey="value" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.6} />
               </RadarChart>
             </ResponsiveContainer>
@@ -162,58 +160,51 @@ export default function EvaluationPage() {
 
       </div>
 
-{/* SKILL ANALYSIS */}
-<div className="mt-8 bg-white p-4 rounded shadow">
+      {/* SKILL ANALYSIS */}
+      <div className="mt-8 bg-white p-4 rounded shadow">
+        <h2 className="font-semibold mb-4">Skill Analysis</h2>
 
-  <h2 className="font-semibold mb-4">Skill Analysis</h2>
+        <div className="grid md:grid-cols-2 gap-4">
 
-  <div className="grid md:grid-cols-2 gap-4">
+          {/* MATCHED SKILLS — API field: "skills" */}
+          <div>
+            <h3 className="text-green-600 font-medium mb-2">Matched Skills</h3>
+            {matchedSkills.length > 0 ? (
+              matchedSkills.map((s, i) => (
+                <span key={i} className="inline-block bg-green-100 px-2 py-1 mr-2 mb-2 rounded">
+                  {s}
+                </span>
+              ))
+            ) : (
+              <p className="text-gray-500">No matched skills</p>
+            )}
+          </div>
 
-    {/* MATCHED SKILLS */}
-    <div>
-      <h3 className="text-green-600 font-medium mb-2">Matched Skills</h3>
-      {evaluation.skills_matched?.length > 0 ? (
-        evaluation.skills_matched.map((s, i) => (
-          <span
-            key={i}
-            className="inline-block bg-green-100 px-2 py-1 mr-2 mb-2 rounded"
-          >
-            {s}
-          </span>
-        ))
-      ) : (
-        <p className="text-gray-500">No matched skills</p>
-      )}
+          {/* MISSING SKILLS — API field: "missing_skills" */}
+          <div>
+            <h3 className="text-red-600 font-medium mb-2">Missing Skills</h3>
+            {missingSkills.length > 0 ? (
+              missingSkills.map((s, i) => (
+                <span key={i} className="inline-block bg-red-100 px-2 py-1 mr-2 mb-2 rounded">
+                  {s}
+                </span>
+              ))
+            ) : (
+              <p className="text-gray-500">No missing skills</p>
+            )}
+          </div>
+
+        </div>
+
+        {/* FEEDBACK */}
+        <div className="mt-4">
+          <h3 className="font-medium mb-2">Feedback</h3>
+          <p className="text-gray-700">
+            {evaluation.feedback || "No feedback available"}
+          </p>
+        </div>
+
+      </div>
     </div>
-
-    {/* MISSING SKILLS */}
-    <div>
-      <h3 className="text-red-600 font-medium mb-2">Missing Skills</h3>
-      {evaluation.missing_skills?.length > 0 ? (
-        evaluation.missing_skills.map((s, i) => (
-          <span
-            key={i}
-            className="inline-block bg-red-100 px-2 py-1 mr-2 mb-2 rounded"
-          >
-            {s}
-          </span>
-        ))
-      ) : (
-        <p className="text-gray-500">No missing skills</p>
-      )}
-    </div>
-
-  </div>
-
-  {/* FEEDBACK */}
-  <div className="mt-4">
-    <h3 className="font-medium mb-2">Feedback</h3>
-    <p className="text-gray-700">
-      {evaluation.feedback || "No feedback available"}
-    </p>
-  </div>
-
-</div>
-</div>
-)
+  )
 }
