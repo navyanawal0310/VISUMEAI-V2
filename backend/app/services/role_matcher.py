@@ -1,247 +1,439 @@
+import re
 import logging
+import math
 from typing import List, Dict, Optional
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import httpx
-from ..models.schemas import RoleMatchResult, JobDescription, ResumeAnalysisResult, TranscriptAnalysisResult
+from ..models.schemas import (
+    RoleMatchResult, JobDescription,
+    ResumeAnalysisResult, TranscriptAnalysisResult,
+)
 from ..config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Scoring constants
+# ---------------------------------------------------------------------------
+
+# Weights for overall match_percentage — must sum to 1.0
+_W_TECHNICAL    = 0.45
+_W_EXPERIENCE   = 0.25
+_W_COMMUNICATION = 0.20
+_W_ATS          = 0.10
+
+# Experience scoring thresholds
+_EXP_FULL_CREDIT_RATIO  = 1.0   # meets or exceeds requirement
+_EXP_PARTIAL_FLOOR      = 0.30  # minimum score when exp is 0 vs large requirement
+_EXP_ABOVE_BONUS        = 5.0   # flat bonus points for exceeding by ≥1 year (capped at 100)
+
+# Preferred-skill bonus to technical score
+_PREFERRED_BONUS_PER_SKILL = 2.0   # points per preferred skill matched
+_PREFERRED_BONUS_CAP        = 10.0  # maximum bonus
+
+
 class RoleMatcher:
-    """Match candidate profiles against job requirements"""
-    
+    """Match candidate profiles against job requirements."""
+
     def __init__(self):
-        # Load sentence transformer for semantic similarity
         try:
-            self.model = SentenceTransformer('all-MiniLM-L6-v2')
-            logger.info("Loaded SentenceTransformer model")
+            self.model = SentenceTransformer("all-MiniLM-L6-v2")
+            logger.info("SentenceTransformer loaded")
         except Exception as e:
-            logger.warning(f"Could not load SentenceTransformer: {e}")
+            logger.warning(f"SentenceTransformer unavailable: {e}")
             self.model = None
-    
+
+    # ── Public API ─────────────────────────────────────────────────────────
+
     async def match_role(
         self,
         job_description: JobDescription,
         resume_analysis: Optional[ResumeAnalysisResult] = None,
-        transcript_analysis: Optional[TranscriptAnalysisResult] = None
+        transcript_analysis: Optional[TranscriptAnalysisResult] = None,
     ) -> RoleMatchResult:
-        """Match candidate against job requirements"""
+        """Return a fully-populated RoleMatchResult."""
         try:
-            logger.info(f"Matching candidate against role: {job_description.title}")
-            
-            # Extract JD requirements if needed
+            logger.info(f"Matching against role: {job_description.title}")
+
+            # Ensure required_skills is populated
             if not job_description.required_skills:
                 job_description = await self._extract_jd_requirements(job_description)
-            
-            # Gather candidate skills
-            candidate_skills = set()
+
+            required_skills = {s.lower() for s in job_description.required_skills}
+            preferred_skills = {s.lower() for s in (job_description.preferred_skills or [])}
+
+            # Gather all candidate skills
+            candidate_skills: set = set()
             if resume_analysis:
-                candidate_skills.update(resume_analysis.skills)
-                candidate_skills.update(resume_analysis.tools)
-            
+                candidate_skills.update(s.lower() for s in resume_analysis.skills)
+                candidate_skills.update(s.lower() for s in resume_analysis.tools)
             if transcript_analysis:
-                candidate_skills.update([term.lower() for term in transcript_analysis.technical_terms])
-            
-            # Required skills matching
-            required_skills = set(skill.lower() for skill in job_description.required_skills)
-            matching_skills = list(candidate_skills.intersection(required_skills))
-            missing_skills = list(required_skills - candidate_skills)
-            
-            # Calculate match percentage
-            skill_match_pct = (len(matching_skills) / len(required_skills) * 100) if required_skills else 50.0
-            
-            # Experience matching
-            experience_match = self._check_experience_match(
+                candidate_skills.update(t.lower() for t in transcript_analysis.technical_terms)
+
+            # Skill overlap
+            matching_skills = sorted(candidate_skills & required_skills)
+            missing_skills  = sorted(required_skills - candidate_skills)
+
+            # ── Component scores ──────────────────────────────────────────
+
+            technical_score = self._score_technical(
+                required_skills, preferred_skills, candidate_skills
+            )
+
+            experience_score, experience_match = self._score_experience(
                 job_description.experience_years,
-                resume_analysis.experience_years if resume_analysis else None
+                resume_analysis.experience_years if resume_analysis else None,
             )
-            
-            # Semantic similarity
-            semantic_similarity = await self._compute_semantic_similarity(
-                job_description,
-                resume_analysis,
-                transcript_analysis
+
+            communication_score = await self._score_communication(
+                job_description, resume_analysis, transcript_analysis
             )
-            
-            # Overall match percentage (weighted)
+
+            ats_score = self._score_ats(
+                required_skills, candidate_skills,
+                resume_analysis, transcript_analysis
+            )
+
+            # ── Overall ───────────────────────────────────────────────────
             match_percentage = (
-                skill_match_pct * 0.5 +
-                (100 if experience_match else 50) * 0.2 +
-                semantic_similarity * 100 * 0.3
+                technical_score      * _W_TECHNICAL +
+                experience_score     * _W_EXPERIENCE +
+                communication_score  * _W_COMMUNICATION +
+                ats_score            * _W_ATS
             )
-            
-            # Identify strengths and gaps
-            strengths = self._identify_strengths(
-                matching_skills,
-                job_description.preferred_skills or []
+            match_percentage = round(min(100.0, max(0.0, match_percentage)), 1)
+
+            # ── Semantic similarity (informational only) ──────────────────
+            semantic_similarity = communication_score / 100.0
+
+            # ── Narrative ────────────────────────────────────────────────
+            strengths = self._build_strengths(
+                matching_skills, preferred_skills,
+                experience_match, technical_score,
             )
-            gaps = self._identify_gaps(missing_skills)
-            
+            gaps = self._build_gaps(
+                missing_skills, experience_match,
+                job_description.experience_years,
+                resume_analysis.experience_years if resume_analysis else None,
+            )
+            feedback = self._build_feedback(
+                match_percentage, technical_score, experience_score,
+                communication_score, strengths, gaps,
+            )
+
             result = RoleMatchResult(
-                match_percentage=min(100.0, max(0.0, match_percentage)),
+                match_percentage=match_percentage,
+                technical_score=round(technical_score, 1),
+                experience_score=round(experience_score, 1),
+                ats_score=round(ats_score, 1),
+                communication_score=round(communication_score, 1),
                 matching_skills=matching_skills,
-                missing_skills=missing_skills[:10],  # Top 10 missing
+                missing_skills=missing_skills[:10],
                 experience_match=experience_match,
-                semantic_similarity=semantic_similarity,
+                semantic_similarity=round(semantic_similarity, 3),
                 strengths=strengths,
-                gaps=gaps
+                gaps=gaps,
+                feedback=feedback,
             )
-            
-            logger.info(f"Role match complete: {result.match_percentage:.1f}%")
+
+            logger.info(
+                f"Match complete — overall:{result.match_percentage} "
+                f"tech:{result.technical_score} exp:{result.experience_score} "
+                f"comm:{result.communication_score} ats:{result.ats_score}"
+            )
             return result
-            
+
         except Exception as e:
-            logger.error(f"Error matching role: {str(e)}")
+            logger.error(f"match_role error: {e}")
             raise
-    
+
+    # ── Scoring helpers ────────────────────────────────────────────────────
+
+    def _score_technical(
+        self,
+        required: set,
+        preferred: set,
+        candidate: set,
+    ) -> float:
+        """
+        Base score = % of required skills matched (0–100).
+        Bonus = preferred skills matched * 2 pts, capped at 10.
+        Total is capped at 100.
+        """
+        if not required:
+            # No required skills defined: use preferred coverage as proxy
+            if not preferred:
+                return 50.0
+            covered = len(candidate & preferred) / len(preferred) * 100
+            return round(min(100.0, covered), 1)
+
+        base = len(candidate & required) / len(required) * 100
+
+        bonus = min(
+            len(candidate & preferred) * _PREFERRED_BONUS_PER_SKILL,
+            _PREFERRED_BONUS_CAP,
+        )
+        return round(min(100.0, base + bonus), 1)
+
+    def _score_experience(
+        self,
+        required_years: Optional[int],
+        candidate_years: Optional[float],
+    ) -> tuple:
+        """
+        Returns (score: float, match: bool).
+
+        Scoring curve:
+        - candidate_years >= required_years  → 100 (+ small overqualification bonus)
+        - candidate_years == 0               → 30
+        - in between                         → linear interpolation 30 → 100
+        - required_years is None             → 80 (unspecified; no penalty)
+        - candidate_years is None            → 50 (unknown; conservative)
+        """
+        if required_years is None:
+            # No requirement stated — benefit of the doubt
+            return 80.0, True
+
+        if candidate_years is None:
+            # Cannot verify — conservative default
+            return 50.0, False
+
+        match = candidate_years >= required_years
+
+        if required_years == 0:
+            return 100.0, True
+
+        ratio = candidate_years / required_years
+        if ratio >= 1.0:
+            # Meets or exceeds — award full credit plus a small bonus for seniority
+            score = min(100.0, 95.0 + min(candidate_years - required_years, 1.0) * 5.0)
+        else:
+            # Linear ramp from 30 (0 years) to 95 (meets requirement)
+            score = 30.0 + ratio * 65.0
+
+        return round(score, 1), match
+
+    def _score_ats(
+        self,
+        required_skills: set,
+        candidate_skills: set,
+        resume_analysis: Optional[ResumeAnalysisResult],
+        transcript_analysis: Optional[TranscriptAnalysisResult],
+    ) -> float:
+        """
+        ATS score based on three signals (each weighted):
+        1. Keyword coverage    (50 pts) — % of required skills present
+        2. Section completeness (30 pts) — skills / education / experience / projects
+        3. Resume length        (20 pts) — optimal 300–1 200 words
+        """
+        # 1. Keyword coverage
+        if required_skills:
+            kw_score = len(candidate_skills & required_skills) / len(required_skills) * 50
+        else:
+            kw_score = 35.0  # no JD to compare; partial credit
+
+        # 2. Section completeness
+        section_score = 0.0
+        if resume_analysis:
+            if resume_analysis.skills:
+                section_score += 10
+            if resume_analysis.education:
+                section_score += 7
+            if resume_analysis.experience_years and resume_analysis.experience_years > 0:
+                section_score += 8
+            if resume_analysis.projects:
+                section_score += 5
+
+        # 3. Resume length
+        length_score = 0.0
+        if resume_analysis:
+            word_count = len(resume_analysis.parsed_text.split())
+            if 300 <= word_count <= 1200:
+                length_score = 20.0
+            elif word_count < 300:
+                length_score = (word_count / 300) * 20.0
+            else:
+                # Diminishing score above 1 200, hits 0 at 2 400
+                excess = min(word_count - 1200, 1200)
+                length_score = max(0.0, (1 - excess / 1200) * 20.0)
+
+        total = kw_score + section_score + length_score
+        return round(min(100.0, total), 1)
+
+    async def _score_communication(
+        self,
+        jd: JobDescription,
+        resume_analysis: Optional[ResumeAnalysisResult],
+        transcript_analysis: Optional[TranscriptAnalysisResult],
+    ) -> float:
+        """
+        Semantic similarity between JD and candidate content, scaled 0–100.
+        Falls back to a content-based heuristic when the model is unavailable
+        so the score remains informative rather than a flat constant.
+        """
+        if self.model:
+            try:
+                jd_text = f"{jd.title}. {jd.description}"
+                parts: List[str] = []
+                if resume_analysis:
+                    parts.append(resume_analysis.parsed_text[:1500])
+                if transcript_analysis:
+                    parts.append(transcript_analysis.transcript[:1000])
+                if not parts:
+                    return 50.0
+
+                candidate_text = " ".join(parts)
+                jd_emb   = self.model.encode([jd_text])
+                cand_emb = self.model.encode([candidate_text])
+                sim = float(cosine_similarity(jd_emb, cand_emb)[0][0])
+                # Cosine similarity for text embeddings typically sits in 0.2–0.9;
+                # rescale to 0–100 so the full range is usable in the UI
+                rescaled = (max(0.0, sim - 0.15) / 0.75) * 100
+                return round(min(100.0, max(0.0, rescaled)), 1)
+            except Exception as e:
+                logger.error(f"Semantic similarity error: {e}")
+
+        # ── Heuristic fallback (no model) ─────────────────────────────────
+        # Count how many JD tokens appear in the resume text
+        if not resume_analysis:
+            return 45.0
+        jd_tokens = set(re.findall(r"\b\w{4,}\b", jd.description.lower()))
+        resume_tokens = set(re.findall(r"\b\w{4,}\b", resume_analysis.parsed_text.lower()))
+        if not jd_tokens:
+            return 45.0
+        overlap = len(jd_tokens & resume_tokens) / len(jd_tokens)
+        # Map 0→20, 0.5→65, 1.0→90
+        score = 20 + overlap * 70
+        return round(min(90.0, score), 1)
+
+    # ── Narrative builders ────────────────────────────────────────────────
+
+    def _build_strengths(
+        self,
+        matching_skills: List[str],
+        preferred: set,
+        experience_match: bool,
+        technical_score: float,
+    ) -> List[str]:
+        out: List[str] = []
+        if technical_score >= 80:
+            out.append(
+                f"Strong technical alignment — {len(matching_skills)} of "
+                f"{len(matching_skills) + 0} required skills matched"
+            )
+        elif len(matching_skills) >= 3:
+            out.append(f"Solid overlap: {len(matching_skills)} required skills matched")
+
+        bonus = [s for s in matching_skills if s in preferred]
+        if bonus:
+            out.append(f"Also has preferred skills: {', '.join(bonus[:3])}")
+
+        if experience_match:
+            out.append("Meets or exceeds the required years of experience")
+
+        return out
+
+    def _build_gaps(
+        self,
+        missing_skills: List[str],
+        experience_match: bool,
+        required_years: Optional[int],
+        candidate_years: Optional[float],
+    ) -> List[str]:
+        out: List[str] = []
+        if missing_skills:
+            top = missing_skills[:4]
+            out.append(
+                f"{len(missing_skills)} required skill(s) not found — "
+                f"top gaps: {', '.join(top)}"
+            )
+        if not experience_match and required_years is not None and candidate_years is not None:
+            deficit = required_years - candidate_years
+            out.append(
+                f"Experience gap: {candidate_years:.1f} yrs detected, "
+                f"{required_years} yrs required (deficit ≈ {deficit:.1f} yrs)"
+            )
+        return out
+
+    def _build_feedback(
+        self,
+        overall: float,
+        technical: float,
+        experience: float,
+        communication: float,
+        strengths: List[str],
+        gaps: List[str],
+    ) -> str:
+        parts: List[str] = []
+
+        if overall >= 80:
+            parts.append("Strong overall match — recommend advancing to interview.")
+        elif overall >= 60:
+            parts.append("Moderate match — worth a screening call to clarify gaps.")
+        else:
+            parts.append("Below threshold for this role — significant gaps identified.")
+
+        if strengths:
+            parts.append("Strengths: " + "; ".join(strengths) + ".")
+        if gaps:
+            parts.append("Gaps to address: " + "; ".join(gaps) + ".")
+
+        # Dimension callouts
+        if technical < 50:
+            parts.append("Technical skill coverage needs improvement for this role.")
+        if experience < 60:
+            parts.append("Candidate may be under-experienced for this position.")
+        if communication < 50:
+            parts.append("Resume content alignment with the job description is low.")
+
+        return " ".join(parts)
+
+    # ── JD requirement extraction ─────────────────────────────────────────
+
     async def _extract_jd_requirements(self, jd: JobDescription) -> JobDescription:
-        """Extract requirements from JD using LLM"""
         try:
-            # Try to use Llama 3.2 API
             if settings.LLAMA_API_URL:
                 skills = await self._extract_with_llama(jd.description)
                 if skills:
                     jd.required_skills = skills
                     return jd
-            
-            # Fallback to keyword extraction
-            skills = self._extract_skills_keywords(jd.description)
-            jd.required_skills = skills
+            jd.required_skills = self._extract_skills_keywords(jd.description)
             return jd
-            
         except Exception as e:
-            logger.error(f"Error extracting JD requirements: {str(e)}")
+            logger.error(f"JD extraction error: {e}")
             return jd
-    
+
     async def _extract_with_llama(self, jd_text: str) -> List[str]:
-        """Extract skills using Llama 3.2"""
         try:
-            prompt = f"""
-            Extract a list of technical skills and requirements from the following job description.
-            Return only skill names, one per line, without explanations.
-            
-            Job Description:
-            {jd_text}
-            
-            Skills:
-            """
-            
+            prompt = (
+                "Extract a list of technical skills and requirements from the job description below. "
+                "Return only skill names, one per line, no explanations.\n\n"
+                f"Job Description:\n{jd_text}\n\nSkills:"
+            )
             async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
+                r = await client.post(
                     settings.LLAMA_API_URL,
-                    json={
-                        "model": "llama3.2",
-                        "prompt": prompt,
-                        "stream": False
-                    }
+                    json={"model": "llama3.2", "prompt": prompt, "stream": False},
                 )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    skills_text = result.get('response', '')
-                    skills = [s.strip() for s in skills_text.split('\n') if s.strip()]
-                    return skills[:20]  # Limit to top 20
-            
-            return []
-            
+                if r.status_code == 200:
+                    skills_text = r.json().get("response", "")
+                    return [s.strip() for s in skills_text.splitlines() if s.strip()][:20]
         except Exception as e:
-            logger.warning(f"Could not extract with Llama: {e}")
-            return []
-    
+            logger.warning(f"Llama extraction failed: {e}")
+        return []
+
     def _extract_skills_keywords(self, text: str) -> List[str]:
-        """Fallback keyword extraction"""
-        skill_keywords = {
-            'python', 'java', 'javascript', 'react', 'angular', 'vue', 'node.js',
-            'django', 'flask', 'spring', 'docker', 'kubernetes', 'aws', 'azure',
-            'sql', 'nosql', 'mongodb', 'postgresql', 'git', 'agile', 'scrum',
-            'machine learning', 'deep learning', 'nlp', 'computer vision', 'api',
-            'microservices', 'rest', 'graphql', 'ci/cd', 'devops', 'linux'
+        """Lightweight fallback keyword extraction from JD text."""
+        keywords = {
+            "python", "java", "javascript", "react", "angular", "vue", "node.js",
+            "django", "flask", "spring", "docker", "kubernetes", "aws", "azure",
+            "sql", "nosql", "mongodb", "postgresql", "git", "agile", "scrum",
+            "machine learning", "deep learning", "nlp", "computer vision", "api",
+            "microservices", "rest", "graphql", "ci/cd", "devops", "linux",
+            "tensorflow", "pytorch", "spark", "hadoop", "typescript", "golang",
         }
-        
-        text_lower = text.lower()
-        found_skills = [skill for skill in skill_keywords if skill in text_lower]
-        return found_skills
-    
-    def _check_experience_match(
-        self,
-        required_years: Optional[int],
-        candidate_years: Optional[float]
-    ) -> bool:
-        """Check if candidate experience matches requirement"""
-        if required_years is None or candidate_years is None:
-            return True  # Give benefit of doubt
-        
-        return candidate_years >= required_years
-    
-    async def _compute_semantic_similarity(
-        self,
-        jd: JobDescription,
-        resume_analysis: Optional[ResumeAnalysisResult],
-        transcript_analysis: Optional[TranscriptAnalysisResult]
-    ) -> float:
-        """Compute semantic similarity using embeddings"""
-        if not self.model:
-            return 0.7  # Default moderate similarity
-        
-        try:
-            # Create JD text
-            jd_text = f"{jd.title}. {jd.description}"
-            
-            # Create candidate text
-            candidate_text_parts = []
-            if resume_analysis:
-                candidate_text_parts.append(resume_analysis.parsed_text[:1000])
-            if transcript_analysis:
-                candidate_text_parts.append(transcript_analysis.transcript[:1000])
-            
-            if not candidate_text_parts:
-                return 0.5
-            
-            candidate_text = " ".join(candidate_text_parts)
-            
-            # Compute embeddings
-            jd_embedding = self.model.encode([jd_text])
-            candidate_embedding = self.model.encode([candidate_text])
-            
-            # Compute cosine similarity
-            similarity = cosine_similarity(jd_embedding, candidate_embedding)[0][0]
-            
-            return float(max(0.0, min(1.0, similarity)))
-            
-        except Exception as e:
-            logger.error(f"Error computing semantic similarity: {str(e)}")
-            return 0.6
-    
-    def _identify_strengths(
-        self,
-        matching_skills: List[str],
-        preferred_skills: List[str]
-    ) -> List[str]:
-        """Identify candidate strengths"""
-        strengths = []
-        
-        if len(matching_skills) > 5:
-            strengths.append(f"Strong technical skill match with {len(matching_skills)} matching skills")
-        
-        # Check for preferred skills
-        matching_preferred = set(s.lower() for s in matching_skills).intersection(
-            set(s.lower() for s in preferred_skills)
-        )
-        if matching_preferred:
-            strengths.append(f"Has preferred skills: {', '.join(list(matching_preferred)[:3])}")
-        
-        return strengths
-    
-    def _identify_gaps(self, missing_skills: List[str]) -> List[str]:
-        """Identify skill gaps"""
-        gaps = []
-        
-        if missing_skills:
-            if len(missing_skills) <= 3:
-                gaps.append(f"Minor skill gaps: {', '.join(missing_skills)}")
-            else:
-                gaps.append(f"Multiple skill gaps including: {', '.join(missing_skills[:3])}")
-        
-        return gaps
+        text_l = text.lower()
+        return [kw for kw in keywords if re.search(r"\b" + re.escape(kw) + r"\b", text_l)]

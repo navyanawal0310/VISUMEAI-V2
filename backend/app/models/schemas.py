@@ -3,6 +3,8 @@ from typing import Optional, Dict, List
 from datetime import datetime
 from enum import Enum
 import uuid
+from pydantic import BaseModel, Field
+from typing import List, Optional
 
 class UserRole(str, Enum):
     CANDIDATE = "candidate"
@@ -94,15 +96,54 @@ class ResumeAnalysisResult(BaseModel):
     education: List[str]
     certifications: List[str]
     tools: List[str]
+    projects: List[str] = []  # extracted project titles / descriptions
 
 class RoleMatchResult(BaseModel):
-    match_percentage: float = Field(..., ge=0, le=100)
-    matching_skills: List[str]
-    missing_skills: List[str]
-    experience_match: bool
-    semantic_similarity: float = Field(..., ge=0, le=1)
-    strengths: List[str]
-    gaps: List[str]
+    # ── Core ─────────────────────────────────────────────
+    match_percentage: float = Field(
+        0.0,
+        description="Weighted overall score 0-100"
+    )
+
+    # ── Component scores ─────────────────────────────────
+    technical_score: float = Field(
+        0.0,
+        description="Skill match % against required skills"
+    )
+
+    experience_score: float = Field(
+        0.0,
+        description="Experience years match score 0-100"
+    )
+
+    ats_score: float = Field(
+        0.0,
+        description="ATS keyword density score 0-100"
+    )
+
+    communication_score: float = Field(
+        0.0,
+        description="Semantic similarity score 0-100"
+    )
+
+    # ── Skills ───────────────────────────────────────────
+    matching_skills: List[str] = Field(default_factory=list)
+
+    missing_skills: List[str] = Field(default_factory=list)
+
+    # ── Extra info ───────────────────────────────────────
+    experience_match: Optional[bool] = None
+
+    semantic_similarity: Optional[float] = None
+
+    strengths: List[str] = Field(default_factory=list)
+
+    gaps: List[str] = Field(default_factory=list)
+
+    feedback: Optional[str] = None
+
+    class Config:
+        populate_by_name = True
 
 class SoftSkillIndex(BaseModel):
     communication: float = Field(..., ge=0, le=1)

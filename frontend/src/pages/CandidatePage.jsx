@@ -4,13 +4,128 @@ import { Upload, FileText, Video, Loader, CheckCircle, AlertCircle, Briefcase } 
 import { useDropzone } from 'react-dropzone'
 import { uploadVideo, uploadResume, evaluateCandidate, listJobPostings, checkVideoQuality, getLatestSubmission } from '../services/api'
 
+// ---------------------------------------------------------------------------
+// Lightweight client-side JD preview
+// Mirrors the skill list from jd_parser.py so the user sees instant feedback.
+// This runs in the browser only — the authoritative parse happens on the server.
+// ---------------------------------------------------------------------------
+const PREVIEW_SKILLS = [
+  "python","java","javascript","typescript","c++","c#","golang","rust","ruby",
+  "php","swift","kotlin","scala","matlab","bash","powershell","react","angular",
+  "vue","django","flask","fastapi","express","spring","node.js","laravel",".net",
+  "tensorflow","pytorch","keras","scikit-learn","pandas","numpy","next.js","sql",
+  "mysql","postgresql","mongodb","redis","cassandra","dynamodb","oracle",
+  "elasticsearch","neo4j","sqlite","aws","azure","gcp","docker","kubernetes",
+  "jenkins","terraform","ansible","ci/cd","git","jira","linux","unix",
+  "machine learning","deep learning","nlp","natural language processing",
+  "computer vision","data science","data engineering","spark","hadoop",
+  "tableau","power bi","agile","scrum","microservices","rest api","graphql","devops",
+]
+
+const PREFERRED_RE = /\b(nice[- ]to[- ]have|preferred?|bonus|optional|desirable|good to have)\b/i
+const REQUIRED_RE  = /\b(required?|must[- ]have|essential|mandatory|minimum)\b/i
+
+function extractPreviewSkills(text) {
+  const lower = text.toLowerCase()
+  const chunks = text.split(/[\n.;]/).filter(Boolean)
+  const required = new Set()
+  const preferred = new Set()
+
+  chunks.forEach(chunk => {
+    const cl = chunk.toLowerCase()
+    const isPref = PREFERRED_RE.test(chunk)
+    const isReq  = REQUIRED_RE.test(chunk)
+    PREVIEW_SKILLS.forEach(skill => {
+      const escaped = skill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      if (new RegExp(`\\b${escaped}\\b`, 'i').test(chunk)) {
+        if (isPref && !isReq) preferred.add(skill)
+        else required.add(skill)
+      }
+    })
+  })
+  // A skill can't be in both — required wins
+  preferred.forEach(s => { if (required.has(s)) preferred.delete(s) })
+
+  // Fallback: if bucketing found nothing, scan the full text
+  if (required.size === 0 && preferred.size === 0) {
+    PREVIEW_SKILLS.forEach(skill => {
+      const escaped = skill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      if (new RegExp(`\\b${escaped}\\b`, 'i').test(text)) required.add(skill)
+    })
+  }
+  return { required: [...required], preferred: [...preferred] }
+}
+
+function extractPreviewExp(text) {
+  const patterns = [
+    /(\d+)\+?\s*(?:years?|yrs?)\s+(?:of\s+)?experience/i,
+    /minimum\s+(?:of\s+)?(\d+)\+?\s*(?:years?|yrs?)/i,
+    /at\s+least\s+(\d+)\+?\s*(?:years?|yrs?)/i,
+    /(\d+)\+\s*(?:years?|yrs?)/i,
+  ]
+  for (const pat of patterns) {
+    const m = text.match(pat)
+    if (m) return parseInt(m[1], 10)
+  }
+  return null
+}
+
+function JDPreview({ jdText }) {
+  const { required, preferred } = extractPreviewSkills(jdText)
+  const exp = extractPreviewExp(jdText)
+
+  if (required.length === 0 && preferred.length === 0) return null
+
+  return (
+    <div className="mt-3 p-4 bg-indigo-50 border border-indigo-200 rounded-lg text-sm">
+      <p className="font-semibold text-indigo-800 mb-2 flex items-center gap-1.5">
+        <Briefcase className="h-4 w-4" /> Skills detected from this JD
+        <span className="font-normal text-indigo-500 text-xs">(preview — server parse is authoritative)</span>
+      </p>
+
+      {required.length > 0 && (
+        <div className="mb-2">
+          <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Required</span>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {required.map(s => (
+              <span key={s} className="px-2 py-0.5 bg-indigo-200 text-indigo-900 rounded-full text-xs font-medium">
+                {s}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {preferred.length > 0 && (
+        <div className="mb-2">
+          <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Preferred</span>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {preferred.map(s => (
+              <span key={s} className="px-2 py-0.5 bg-violet-100 text-violet-800 rounded-full text-xs font-medium">
+                {s}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {exp !== null && (
+        <p className="text-indigo-700 text-xs mt-1">
+          <strong>Experience:</strong> {exp}+ years detected
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function CandidatePage() {
   const navigate = useNavigate()
   // FIX 2: Renamed state variable from `formData` to `fields` so it can't be
   // shadowed by `const formData = new FormData()` inside handleSubmit.
   const [fields, setFields] = useState({
     candidateName: '',
-    selectedJobId: ''
+    selectedJobId: '',
+    jdText: '',
   })
   const [jobPostings, setJobPostings] = useState([])
   const [loadingJobs, setLoadingJobs] = useState(true)
@@ -123,6 +238,7 @@ export default function CandidatePage() {
     // the state. The state was renamed to `fields` above.
     const formData = new FormData();
     formData.append("file", resumeFile);
+    formData.append("jd_text", fields.jdText.trim());
 
     try {
       setLoading(true);
@@ -269,6 +385,31 @@ export default function CandidatePage() {
           </div>
         )}
         
+        {/* Job Description */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-semibold text-gray-900 mb-1">
+            Job Description
+          </h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Paste the job posting below. The AI will extract required skills and
+            experience to give you a precise match score.
+          </p>
+
+          <textarea
+            name="jdText"
+            value={fields.jdText}
+            onChange={handleInputChange}
+            rows={8}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm leading-relaxed resize-y"
+            placeholder={`Paste the full job description here, for example:\n\nSenior Data Scientist\n\nWe are looking for a Senior Data Scientist with 4+ years of experience.\n\nRequired: Python, SQL, Machine Learning, TensorFlow, AWS\nPreferred: Spark, Tableau, Docker`}
+          />
+
+          {/* Live preview of extracted skills once the user has typed enough */}
+          {fields.jdText.trim().length > 40 && (
+            <JDPreview jdText={fields.jdText} />
+          )}
+        </div>
+
         {/* File Uploads */}
         <div className="mb-8">
           <h2 className="text-2xl font-semibold text-gray-900 mb-4">Upload Files</h2>
