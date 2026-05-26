@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import {
   Loader, AlertCircle, ArrowLeft,
   CheckCircle2, XCircle, TrendingUp, Award,
-  Cpu, Briefcase, FileSearch, MessageSquare, Target
+  Cpu, Briefcase, FileSearch, MessageSquare, Target, Download
 } from 'lucide-react'
 import {
   BarChart, Bar, RadarChart, Radar, PolarGrid,
@@ -156,9 +156,21 @@ export default function EvaluationPage() {
           <Link to="/candidate" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 font-medium text-sm">
             <ArrowLeft size={16} /> Back
           </Link>
-          <span className={`px-4 py-1.5 text-white text-sm font-semibold rounded-full shadow ${badge.bg}`}>
-            {badge.label}
-          </span>
+          <div className="flex items-center gap-3">
+            {evaluation.report_url && (
+              <a
+                href={`http://localhost:8000${evaluation.report_url}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full hover:bg-indigo-100 transition-colors"
+              >
+                <Download size={14} /> Download PDF Report
+              </a>
+            )}
+            <span className={`px-4 py-1.5 text-white text-sm font-semibold rounded-full shadow ${badge.bg}`}>
+              {badge.label}
+            </span>
+          </div>
         </div>
 
         {/* ── Hero card ── */}

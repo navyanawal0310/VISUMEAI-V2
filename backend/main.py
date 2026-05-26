@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Depends
 import uuid
 import os
 from app.services.resume_parser import ResumeParser
@@ -11,6 +11,12 @@ import os
 from app.config.settings import settings
 from app.api.routes import router
 from app.services.jd_parser import parse as parse_jd
+from app.services.improvement_engine import generate as generate_recommendations
+from app.services.pdf_generator import PDFGenerator
+from app.models.schemas import CandidateEvaluation
+from app.database.db import engine, get_db, Base
+from app.database.models import CandidateRecord  # noqa: F401 — registers the table
+from app.database import crud
 
 # Configure logging
 logging.basicConfig(
@@ -68,6 +74,34 @@ async def startup_event():
 # Upload directory setup
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_DIR, "reports"), exist_ok=True)
+
+# Create database tables (no-op if they already exist)
+Base.metadata.create_all(bind=engine)
+
+
+@app.get("/candidates")
+def list_candidates(db=Depends(get_db)):
+    """Return all stored candidate evaluations, newest first."""
+    records = crud.get_all_evaluations(db)
+    return [
+        {
+            "id":                   r.id,
+            "candidate_name":       r.candidate_name,
+            "resume_filename":      r.resume_filename,
+            "job_title":            r.job_title,
+            "overall_score":        r.overall_score,
+            "technical_score":      r.technical_score,
+            "experience_score":     r.experience_score,
+            "ats_score":            r.ats_score,
+            "communication_score":  r.communication_score,
+            "matched_skills":       [s.strip() for s in r.matched_skills.split(",") if s.strip()],
+            "missing_skills":       [s.strip() for s in r.missing_skills.split(",") if s.strip()],
+            "report_url":           r.report_url,
+            "created_at":           r.created_at.isoformat(),
+        }
+        for r in records
+    ]
 
 @app.post("/upload")
 async def upload(
@@ -136,6 +170,58 @@ async def upload(
             ats_issues.append(f"Resume too long ({word_count} words; trim to under 1 200)")
             ats_recs.append("Remove older or less-relevant roles to a single line each")
 
+        # Generate improvement recommendations
+        improvement_recommendations = generate_recommendations(
+            technical_score=match.technical_score,
+            ats_score=match.ats_score,
+            experience_score=match.experience_score,
+            communication_score=match.communication_score,
+            missing_skills=match.missing_skills,
+            strengths=match.strengths,
+            gaps=match.gaps,
+        )
+
+        # Generate PDF report
+        report_url = None
+        try:
+            evaluation_obj = CandidateEvaluation(
+                evaluation_id=file_id,
+                candidate_name="Candidate",
+                resume_analysis=parsed,
+                role_match=match,
+                overall_score=round(match.match_percentage, 1),
+                recommendation=(
+                    "Highly Recommended" if match.match_percentage >= 80
+                    else "Recommended" if match.match_percentage >= 60
+                    else "Needs Further Review"
+                ),
+            )
+            pdf_path = PDFGenerator().generate_evaluation_pdf(
+                evaluation=evaluation_obj,
+                job_title=job.title,
+            )
+            report_url = "/reports/" + os.path.basename(pdf_path)
+            logger.info(f"PDF report saved: {pdf_path}")
+        except Exception as pdf_err:
+            logger.error(f"PDF generation failed (non-fatal): {pdf_err}")
+
+        # Persist evaluation to database
+        with next(get_db()) as db_session:
+            crud.save_evaluation(
+                db_session,
+                candidate_name="Candidate",
+                resume_filename=file.filename or file_path,
+                job_title=job.title,
+                overall_score=round(match.match_percentage, 2),
+                technical_score=round(match.technical_score, 2),
+                experience_score=round(match.experience_score, 2),
+                ats_score=round(match.ats_score, 2),
+                communication_score=round(match.communication_score, 2),
+                matched_skills=match.matching_skills,
+                missing_skills=match.missing_skills,
+                report_url=report_url,
+            )
+
         return {
             "match_percentage":   round(match.match_percentage, 2),
             "technical_score":    round(match.technical_score, 2),
@@ -153,12 +239,15 @@ async def upload(
             "gaps":               match.gaps,
             "feedback":           match.feedback,
 
-            # Structured ATS block — consumed by the ATS section in EvaluationPage
             "ats_analysis": {
                 "ats_score":          round(match.ats_score, 2),
                 "issues":             ats_issues,
                 "recommendations":    ats_recs,
             },
+
+            "improvement_recommendations": improvement_recommendations,
+
+            "report_url": report_url,
         }
 
     except Exception as e:
