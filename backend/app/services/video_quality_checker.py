@@ -45,7 +45,7 @@ class VideoQualityChecker:
             logger.info(f"Video properties: {width}x{height}, {fps}fps, {duration:.1f}s")
             
             # Check resolution
-            if width < 640 or height < 480:
+            if width < 640 or height < 360:
                 issues.append("Resolution too low (minimum 640x480 required)")
                 recommendations.append("Record at 720p or higher for best results")
             elif width < 1280 or height < 720:

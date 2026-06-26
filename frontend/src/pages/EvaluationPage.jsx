@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import {
   Loader, AlertCircle, ArrowLeft,
   CheckCircle2, XCircle, TrendingUp, Award,
-  Cpu, Briefcase, FileSearch, MessageSquare, Target, Download
+  Cpu, Briefcase, FileSearch, MessageSquare, Target, Download, Video
 } from 'lucide-react'
 import {
   BarChart, Bar, RadarChart, Radar, PolarGrid,
@@ -120,6 +120,7 @@ export default function EvaluationPage() {
   const experienceScore     = clamp(evaluation.experience_score)
   const atsScore            = clamp(evaluation.ats_score)
   const communicationScore  = clamp(evaluation.communication_score)
+  const videoScore          = clamp(evaluation.video_score ?? 0)
 
   // FIX: backend field is "matching_skills", not "skills" or "skills_matched"
   const matchedSkills  = evaluation.matching_skills ?? evaluation.skills ?? evaluation.skills_matched ?? []
@@ -133,20 +134,22 @@ export default function EvaluationPage() {
   const badge = getBadge(overallScore)
 
   const barData = [
-    { name: 'Technical',     score: technicalScore },
-    { name: 'Experience',    score: experienceScore },
-    { name: 'ATS',           score: atsScore },
+    { name: 'Technical',     score: technicalScore     },
+    { name: 'Experience',    score: experienceScore    },
+    { name: 'ATS',           score: atsScore           },
     { name: 'Communication', score: communicationScore },
-    { name: 'Overall',       score: overallScore },
+    { name: 'Video',         score: videoScore         },
+    { name: 'Overall',       score: overallScore       },
   ]
 
   const radarData = [
-    { subject: 'Technical',     value: technicalScore },
-    { subject: 'Experience',    value: experienceScore },
-    { subject: 'ATS',           value: atsScore },
-    { subject: 'Communication', value: communicationScore },
+    { subject: 'Technical',     score: technicalScore     },
+    { subject: 'Experience',    score: experienceScore    },
+    { subject: 'ATS',           score: atsScore           },
+    { subject: 'Communication', score: communicationScore },
+    { subject: 'Video',         score: videoScore         },
   ]
-
+  
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
@@ -202,11 +205,12 @@ export default function EvaluationPage() {
         </div>
 
         {/* ── Mini score cards ── */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <MiniScoreCard icon={Cpu}           label="Technical"     value={technicalScore}     color="text-indigo-500" />
           <MiniScoreCard icon={Briefcase}     label="Experience"    value={experienceScore}    color="text-violet-500" />
           <MiniScoreCard icon={FileSearch}    label="ATS"           value={atsScore}           color="text-pink-500"   />
           <MiniScoreCard icon={MessageSquare} label="Communication" value={communicationScore} color="text-amber-500"  />
+          <MiniScoreCard icon={Video}         label="Video"         value={videoScore}         color="text-purple-500"/>
         </div>
 
         {/* ── Charts ── */}
@@ -242,11 +246,11 @@ export default function EvaluationPage() {
                 <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11, fill: '#6b7280' }} />
                 <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
                 <Radar
-                  dataKey="value"
-                  stroke="#6366f1"
-                  fill="#6366f1"
-                  fillOpacity={0.25}
-                  strokeWidth={2}
+                dataKey="score"
+                stroke="#6366f1"
+                fill="#6366f1"
+                fillOpacity={0.25}
+                strokeWidth={2}
                 />
                 <Tooltip
                   formatter={(v) => [`${Number(v).toFixed(1)}%`, 'Score']}
@@ -382,6 +386,62 @@ export default function EvaluationPage() {
     </div>
   </div>
 )}
+
+        {/* ── Video Introduction Analysis ── */}
+        {(evaluation.video_score !== null && evaluation.video_score !== undefined) && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+            <h2 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+              <Video size={16} className="text-indigo-500" /> Video Introduction Analysis
+            </h2>
+
+            <div className="flex items-center gap-4 mb-5">
+              <div className="flex-1">
+                <div className="flex justify-between items-center mb-1.5">
+                  <span className="text-sm text-gray-500">Video Score</span>
+                  <span className="text-sm font-bold text-gray-800">
+                    {Number(evaluation.video_score).toFixed(1)} / 100
+                  </span>
+                </div>
+                <div className="w-full bg-gray-100 rounded-full h-2.5">
+                  <div
+                    className="h-2.5 rounded-full transition-all duration-700"
+                    style={{
+                      width: `${Math.min(100, Math.max(0, evaluation.video_score))}%`,
+                      background:
+                        evaluation.video_score >= 80 ? '#10b981'
+                        : evaluation.video_score >= 60 ? '#f59e0b'
+                        : '#f43f5e',
+                    }}
+                  />
+                </div>
+              </div>
+              <span className={`px-3 py-1 text-xs font-semibold rounded-full text-white
+                ${evaluation.video_score >= 80 ? 'bg-emerald-500'
+                  : evaluation.video_score >= 60 ? 'bg-amber-500'
+                  : 'bg-rose-500'}`}>
+                {evaluation.video_score >= 80 ? 'Excellent'
+                  : evaluation.video_score >= 60 ? 'Good'
+                  : 'Needs Work'}
+              </span>
+            </div>
+
+            {evaluation.video_feedback && evaluation.video_feedback.length > 0 && (
+              <ul className="space-y-2">
+                {evaluation.video_feedback.map((item, i) => {
+                  const isPositive = /good|great|excellent|clear|well|optimal|looks/i.test(item)
+                  return (
+                    <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
+                      {isPositive
+                        ? <CheckCircle2 size={14} className="text-emerald-500 mt-0.5 flex-shrink-0" />
+                        : <AlertCircle  size={14} className="text-amber-500  mt-0.5 flex-shrink-0" />}
+                      {item}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+        )}
 
       </div>
     </div>

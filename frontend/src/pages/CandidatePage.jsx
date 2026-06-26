@@ -239,6 +239,9 @@ export default function CandidatePage() {
     const formData = new FormData();
     formData.append("file", resumeFile);
     formData.append("jd_text", fields.jdText.trim());
+    if (videoFile) {
+      formData.append("video", videoFile);
+    }
 
     try {
       setLoading(true);
@@ -255,8 +258,9 @@ export default function CandidatePage() {
       }
 
       const data = await res.json();
+      console.log("===== API RESPONSE =====");
       console.log(data);
-
+      
       setSuccess("Upload successful!");
       navigate("/evaluation", { state: data });
 

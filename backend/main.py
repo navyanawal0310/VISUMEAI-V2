@@ -12,6 +12,7 @@ from app.config.settings import settings
 from app.api.routes import router
 from app.services.jd_parser import parse as parse_jd
 from app.services.improvement_engine import generate as generate_recommendations
+from app.services.video_analyzer import analyze as analyze_video
 from app.services.pdf_generator import PDFGenerator
 from app.models.schemas import CandidateEvaluation
 from app.database.db import engine, get_db, Base
@@ -107,6 +108,7 @@ def list_candidates(db=Depends(get_db)):
 async def upload(
     file: UploadFile = File(...),
     jd_text: str = Form(""),
+    video: UploadFile = File(None),
 ):
     try:
         # Save file
@@ -132,13 +134,31 @@ async def upload(
             f"preferred:{len(job.preferred_skills)} "
             f"exp:{job.experience_years}"
         )
+        
+        # Analyze video resume (optional — non-fatal if absent or fails)
+        video_score    = None
+        video_feedback = []
+        if video and video.filename:
+            try:
+                vid_id   = str(uuid.uuid4())
+                vid_path = os.path.join(UPLOAD_DIR, f"{vid_id}_{video.filename}")
+                vid_content = await video.read()
+                with open(vid_path, "wb") as vf:
+                    vf.write(vid_content)
+                video_result   = analyze_video(vid_path)
+                video_score    = video_result.get("video_score")
+                video_feedback = video_result.get("video_feedback", [])
+                logger.info(f"VIDEO — score:{video_score} feedback_count:{len(video_feedback)}")
+            except Exception as vid_err:
+                logger.error(f"Video analysis failed (non-fatal): {vid_err}")
 
         # ✅ Match role
         matcher = RoleMatcher()
         match = await matcher.match_role(
             job_description=job,
-            resume_analysis=parsed
-        )
+            resume_analysis=parsed,
+            video_score=video_score or 0.0
+            )
 
         logger.info(f"MATCH — overall:{match.match_percentage} tech:{match.technical_score}")
 
@@ -180,6 +200,7 @@ async def upload(
             strengths=match.strengths,
             gaps=match.gaps,
         )
+
 
         # Generate PDF report
         report_url = None
@@ -248,6 +269,9 @@ async def upload(
             "improvement_recommendations": improvement_recommendations,
 
             "report_url": report_url,
+
+            "video_score": round(match.video_score, 2),
+            "video_feedback": video_feedback,
         }
 
     except Exception as e:

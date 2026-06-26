@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Weights for overall match_percentage — must sum to 1.0
-_W_TECHNICAL    = 0.45
-_W_EXPERIENCE   = 0.25
-_W_COMMUNICATION = 0.20
-_W_ATS          = 0.10
+_W_TECHNICAL     = 0.40
+_W_EXPERIENCE    = 0.20
+_W_COMMUNICATION = 0.15
+_W_ATS           = 0.10
+_W_VIDEO         = 0.15
 
 # Experience scoring thresholds
 _EXP_FULL_CREDIT_RATIO  = 1.0   # meets or exceeds requirement
@@ -50,9 +51,10 @@ class RoleMatcher:
 
     async def match_role(
         self,
-        job_description: JobDescription,
-        resume_analysis: Optional[ResumeAnalysisResult] = None,
-        transcript_analysis: Optional[TranscriptAnalysisResult] = None,
+        job_description,
+        resume_analysis=None,
+        transcript_analysis=None,
+        video_score: float = 0.0,
     ) -> RoleMatchResult:
         """Return a fully-populated RoleMatchResult."""
         try:
@@ -102,8 +104,9 @@ class RoleMatcher:
                 technical_score      * _W_TECHNICAL +
                 experience_score     * _W_EXPERIENCE +
                 communication_score  * _W_COMMUNICATION +
-                ats_score            * _W_ATS
-            )
+                ats_score            * _W_ATS +
+                video_score          * _W_VIDEO
+                )
             match_percentage = round(min(100.0, max(0.0, match_percentage)), 1)
 
             # ── Semantic similarity (informational only) ──────────────────
@@ -126,6 +129,7 @@ class RoleMatcher:
 
             result = RoleMatchResult(
                 match_percentage=match_percentage,
+                video_score=round(video_score, 1),
                 technical_score=round(technical_score, 1),
                 experience_score=round(experience_score, 1),
                 ats_score=round(ats_score, 1),

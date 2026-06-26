@@ -125,6 +125,7 @@ class RoleMatchResult(BaseModel):
         0.0,
         description="Semantic similarity score 0-100"
     )
+    video_score: float = Field(0.0, description="Video introduction score 0-100")
 
     # ── Skills ───────────────────────────────────────────
     matching_skills: List[str] = Field(default_factory=list)
