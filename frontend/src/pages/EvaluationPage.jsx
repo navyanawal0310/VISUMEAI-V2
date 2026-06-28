@@ -9,7 +9,7 @@ import {
   PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
-import { useLocation, Link } from 'react-router-dom'
+import { useLocation, Link, useNavigate } from 'react-router-dom'
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -77,6 +77,7 @@ const BAR_COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981']
 
 export default function EvaluationPage() {
   const location = useLocation()
+  const navigate = useNavigate()
   const passedData = location.state
 
   const [evaluation, setEvaluation] = useState(null)
@@ -156,25 +157,51 @@ export default function EvaluationPage() {
 
         {/* ── Top bar ── */}
         <div className="flex justify-between items-center">
-          <Link to="/candidate" className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 font-medium text-sm">
-            <ArrowLeft size={16} /> Back
-          </Link>
-          <div className="flex items-center gap-3">
-            {evaluation.report_url && (
-              <a
-                href={`http://localhost:8000${evaluation.report_url}`}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full hover:bg-indigo-100 transition-colors"
-              >
-                <Download size={14} /> Download PDF Report
-              </a>
-            )}
-            <span className={`px-4 py-1.5 text-white text-sm font-semibold rounded-full shadow ${badge.bg}`}>
-              {badge.label}
-            </span>
-          </div>
-        </div>
+  <Link
+    to="/candidate"
+    className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-800 font-medium text-sm"
+  >
+    <ArrowLeft size={16} /> Back
+  </Link>
+
+  <div className="flex items-center gap-3">
+
+    {evaluation.report_url && (
+      <a
+        href={`http://localhost:8000${evaluation.report_url}`}
+        target="_blank"
+        rel="noreferrer"
+        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-full hover:bg-indigo-100 transition-colors"
+      >
+        <Download size={14} />
+        Download PDF Report
+      </a>
+    )}
+
+    {/* NEW BUTTON */}
+    <button
+      onClick={() =>
+        navigate("/interview/setup", {
+          state: {
+    evaluation,
+    candidateName: evaluation.candidate_name,
+    jobTitle: evaluation.job_title
+}
+        })
+      }
+      className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-semibold text-white bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full shadow hover:from-violet-700 hover:to-indigo-700 transition-all"
+    >
+      Start AI Interview
+    </button>
+
+    <span
+      className={`px-4 py-1.5 text-white text-sm font-semibold rounded-full shadow ${badge.bg}`}
+    >
+      {badge.label}
+    </span>
+
+  </div>
+</div>
 
         {/* ── Hero card ── */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col sm:flex-row items-center gap-6">

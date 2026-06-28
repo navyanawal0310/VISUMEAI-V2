@@ -5,6 +5,7 @@ import HomePage from './pages/HomePage'
 import CandidatePage from './pages/CandidatePage'
 import RecruiterDashboard from './pages/RecruiterDashboard'
 import EvaluationPage from './pages/EvaluationPage'
+import InterviewSetup from "./pages/InterviewSetup";
 
 function App() {
   return (
@@ -16,6 +17,10 @@ function App() {
           <Route path="/recruiter" element={<RecruiterDashboard />} />
           <Route path="/evaluation" element={<EvaluationPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
+          <Route
+    path="/interview/setup"
+    element={<InterviewSetup />}
+/>
         </Routes>
       </Layout>
     </Router>
