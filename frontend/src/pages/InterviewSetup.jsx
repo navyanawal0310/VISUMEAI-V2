@@ -91,6 +91,11 @@ const ACCENTS = {
 
 export default function InterviewSetup() {
   const location = useLocation()
+  const {
+    resume_analysis,
+    job_description,
+    evaluation
+} = location.state;
   const navigate = useNavigate()
   const passedData = location.state || {}
 
@@ -101,15 +106,28 @@ export default function InterviewSetup() {
   const [selectedId, setSelectedId] = useState('moderate')
   const selected = DIFFICULTIES.find(d => d.id === selectedId)
   const accent = ACCENTS[selected.accent]
-
-  const handleStart = () => {
-    navigate('/interview', {
-      state: {
-        ...passedData,
-        difficulty: selectedId,
+  const handleStartInterview = async () => {
+    const response = await fetch("http://localhost:8000/generate-interview", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
       },
-    })
-  }
+      body: JSON.stringify({
+        difficulty: selectedId,
+        resume_analysis,
+        job_description,
+      }),
+    });
+
+    const data = await response.json();
+
+    navigate("/interview", {
+      state: {
+        questions: data.questions,
+        difficulty:selectedId,
+      },
+    });
+};
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -275,7 +293,7 @@ export default function InterviewSetup() {
 
           <button
             type="button"
-            onClick={handleStart}
+            onClick={handleStartInterview}
             className="flex items-center gap-2 px-6 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full shadow hover:from-violet-700 hover:to-indigo-700 transition-all"
           >
             <Play size={15} />

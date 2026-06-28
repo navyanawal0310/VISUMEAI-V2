@@ -5,7 +5,8 @@ import HomePage from './pages/HomePage'
 import CandidatePage from './pages/CandidatePage'
 import RecruiterDashboard from './pages/RecruiterDashboard'
 import EvaluationPage from './pages/EvaluationPage'
-import InterviewSetup from "./pages/InterviewSetup";
+import InterviewSetup from "./pages/InterviewSetup"
+import InterviewPage from "./pages/InterviewPage";
 
 function App() {
   return (
@@ -20,6 +21,10 @@ function App() {
           <Route
     path="/interview/setup"
     element={<InterviewSetup />}
+/>
+    <Route
+    path="/interview"
+    element={<InterviewPage />}
 />
         </Routes>
       </Layout>

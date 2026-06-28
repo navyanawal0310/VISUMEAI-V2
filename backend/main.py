@@ -3,11 +3,10 @@ import uuid
 import os
 from app.services.resume_parser import ResumeParser
 from app.services.role_matcher import RoleMatcher
-from app.models.schemas import JobDescription
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import logging
-import os
+import json
 from app.config.settings import settings
 from app.api.routes import router
 from app.services.jd_parser import parse as parse_jd
@@ -18,6 +17,8 @@ from app.models.schemas import CandidateEvaluation
 from app.database.db import engine, get_db, Base
 from app.database.models import CandidateRecord  # noqa: F401 — registers the table
 from app.database import crud
+from app.services.interview_generator import InterviewGenerator
+from app.models.schemas import ResumeAnalysisResult, JobDescription, InterviewRequest
 
 # Configure logging
 logging.basicConfig(
@@ -272,11 +273,108 @@ async def upload(
 
             "video_score": round(match.video_score, 2),
             "video_feedback": video_feedback,
+            "resume_analysis": parsed,
+            "job_description": job,
         }
 
     except Exception as e:
         print("ERROR:", str(e))
         return {"error": str(e)}
+
+@app.post("/generate-interview")
+async def generate_interview(request: InterviewRequest):
+
+    resume = ResumeAnalysisResult(**request.resume_analysis)
+    job = JobDescription(**request.job_description)
+
+    generator = InterviewGenerator()
+
+    questions = generator.generate_questions(
+        resume_analysis=resume,
+        job_description=job,
+        difficulty=request.difficulty,
+    )
+
+    return {
+        "questions": questions
+    }
+
+# The endpoint receives:
+#   - recording_0 … recording_N  (audio/webm blobs, one per question)
+#   - metadata                   (JSON string — see InterviewPage.jsx handleFinish)
+# ---------------------------------------------------------------------------
+
+@app.post("/submit-interview")
+async def submit_interview(
+    metadata: str = Form(...),
+    recording_0:  UploadFile = File(None),
+    recording_1:  UploadFile = File(None),
+    recording_2:  UploadFile = File(None),
+    recording_3:  UploadFile = File(None),
+    recording_4:  UploadFile = File(None),
+    recording_5:  UploadFile = File(None),
+    recording_6:  UploadFile = File(None),
+    recording_7:  UploadFile = File(None),
+    recording_8:  UploadFile = File(None),
+    recording_9:  UploadFile = File(None),
+):
+    """
+    Receive all audio recordings and interview metadata from the frontend.
+    Saves each .webm blob to disk under uploads/interviews/<session_id>/.
+    Does NOT transcribe or evaluate yet — that is a future step.
+    """
+    try:
+        meta = json.loads(metadata)
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid metadata JSON: {e}")
+        raise HTTPException(status_code=422, detail="metadata must be valid JSON")
+
+    session_id  = str(uuid.uuid4())
+    session_dir = os.path.join(UPLOAD_DIR, "interviews", session_id)
+    os.makedirs(session_dir, exist_ok=True)
+
+    # Collect whichever recording_N fields arrived
+    uploads = [
+        recording_0, recording_1, recording_2, recording_3, recording_4,
+        recording_5, recording_6, recording_7, recording_8, recording_9,
+    ]
+
+    saved_files = []
+    for i, upload in enumerate(uploads):
+        if upload is None or not upload.filename:
+            continue
+        content = await upload.read()
+        if not content:
+            continue
+        dest = os.path.join(session_dir, f"question_{i + 1}.webm")
+        with open(dest, "wb") as f:
+            f.write(content)
+        saved_files.append(dest)
+        logger.info(f"[submit-interview] saved recording {i + 1} → {dest} ({len(content)} bytes)")
+
+    # Persist metadata alongside the recordings
+    meta_path = os.path.join(session_dir, "metadata.json")
+    with open(meta_path, "w") as f:
+        json.dump({
+            "session_id":    session_id,
+            "difficulty":    meta.get("difficulty"),
+            "question_count": meta.get("question_count"),
+            "questions":     meta.get("questions", []),
+            "resume_analysis": meta.get("resume_analysis"),
+            "job_description": meta.get("job_description"),
+            "recordings":    [os.path.basename(p) for p in saved_files],
+        }, f, indent=2)
+
+    logger.info(
+        f"[submit-interview] session={session_id} "
+        f"recordings={len(saved_files)}/{meta.get('question_count', '?')}"
+    )
+
+    return {
+        "session_id":      session_id,
+        "recordings_saved": len(saved_files),
+        "status":          "received",
+    }
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -301,3 +399,4 @@ if __name__ == "__main__":
         port=settings.API_PORT,
         reload=settings.DEBUG
     )
+

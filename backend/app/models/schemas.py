@@ -5,6 +5,8 @@ from enum import Enum
 import uuid
 from pydantic import BaseModel, Field
 from typing import List, Optional
+from typing import List, Dict, Any
+from pydantic import BaseModel
 
 class UserRole(str, Enum):
     CANDIDATE = "candidate"
@@ -209,3 +211,12 @@ class EvaluationRequest(BaseModel):
     job_id: Optional[str] = None  # New: reference to job posting
     job_description: Optional[JobDescription] = None  # Deprecated: for backward compatibility
     accessibility_mode: bool = False  # Disable visual analysis if True
+
+
+class InterviewRequest(BaseModel):
+    difficulty: str
+    resume_analysis: Dict[str, Any]
+    job_description: Dict[str, Any]
+
+class InterviewResponse(BaseModel):
+    questions: List[Dict[str, Any]]

@@ -182,13 +182,12 @@ export default function EvaluationPage() {
     <button
       onClick={() =>
         navigate("/interview/setup", {
-          state: {
-    evaluation,
-    candidateName: evaluation.candidate_name,
-    jobTitle: evaluation.job_title
-}
-        })
-      }
+    state: {
+        evaluation,
+        resume_analysis: evaluation.resume_analysis,
+        job_description: evaluation.job_description
+    }
+})      }
       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-semibold text-white bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full shadow hover:from-violet-700 hover:to-indigo-700 transition-all"
     >
       Start AI Interview
