@@ -1,4 +1,6 @@
-from fastapi import FastAPI, UploadFile, File, Form, Depends
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
+from typing import List
+import json
 import uuid
 import os
 from app.services.resume_parser import ResumeParser
@@ -6,7 +8,7 @@ from app.services.role_matcher import RoleMatcher
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import logging
-import json
+import os
 from app.config.settings import settings
 from app.api.routes import router
 from app.services.jd_parser import parse as parse_jd
@@ -77,6 +79,7 @@ async def startup_event():
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(os.path.join(UPLOAD_DIR, "reports"), exist_ok=True)
+os.makedirs(os.path.join(UPLOAD_DIR, "interviews"), exist_ok=True)
 
 # Create database tables (no-op if they already exist)
 Base.metadata.create_all(bind=engine)
@@ -299,82 +302,115 @@ async def generate_interview(request: InterviewRequest):
         "questions": questions
     }
 
-# The endpoint receives:
-#   - recording_0 … recording_N  (audio/webm blobs, one per question)
-#   - metadata                   (JSON string — see InterviewPage.jsx handleFinish)
-# ---------------------------------------------------------------------------
-
 @app.post("/submit-interview")
 async def submit_interview(
     metadata: str = Form(...),
-    recording_0:  UploadFile = File(None),
-    recording_1:  UploadFile = File(None),
-    recording_2:  UploadFile = File(None),
-    recording_3:  UploadFile = File(None),
-    recording_4:  UploadFile = File(None),
-    recording_5:  UploadFile = File(None),
-    recording_6:  UploadFile = File(None),
-    recording_7:  UploadFile = File(None),
-    recording_8:  UploadFile = File(None),
-    recording_9:  UploadFile = File(None),
+    recordings: List[UploadFile] = File(default=[]),
 ):
     """
-    Receive all audio recordings and interview metadata from the frontend.
-    Saves each .webm blob to disk under uploads/interviews/<session_id>/.
-    Does NOT transcribe or evaluate yet — that is a future step.
+    Receive audio recordings and interview metadata from the frontend.
+
+    Form fields
+    -----------
+    metadata    : JSON string — difficulty, question_count, questions list,
+                  optional resume_analysis and job_description.
+    recordings  : One .webm file per question (multi-value field named
+                  "recordings"). Order matches question index.
+
+    Saves each blob to  uploads/interviews/<session_id>/question_N.webm
+    and writes a metadata.json alongside them.
+    Does NOT transcribe or evaluate — that is a future step.
     """
+    # ── Parse metadata ───────────────────────────────────────────────────────
     try:
         meta = json.loads(metadata)
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid metadata JSON: {e}")
+    except json.JSONDecodeError as exc:
+        logger.error(f"[submit-interview] invalid metadata JSON: {exc}")
         raise HTTPException(status_code=422, detail="metadata must be valid JSON")
 
+    difficulty      = meta.get("difficulty", "Unknown")
+    question_count  = meta.get("question_count", 0)
+    questions_meta  = meta.get("questions", [])
+
+    # ── Create per-session directory ─────────────────────────────────────────
     session_id  = str(uuid.uuid4())
     session_dir = os.path.join(UPLOAD_DIR, "interviews", session_id)
     os.makedirs(session_dir, exist_ok=True)
 
-    # Collect whichever recording_N fields arrived
-    uploads = [
-        recording_0, recording_1, recording_2, recording_3, recording_4,
-        recording_5, recording_6, recording_7, recording_8, recording_9,
-    ]
+    # ── Save recordings ───────────────────────────────────────────────────────
+    saved: list[dict] = []
 
-    saved_files = []
-    for i, upload in enumerate(uploads):
-        if upload is None or not upload.filename:
+    for idx, upload in enumerate(recordings):
+        # Skip empty slots (browser may send an empty file object)
+        if not upload or not upload.filename:
+            logger.warning(f"[submit-interview] slot {idx} is empty — skipping")
             continue
+
         content = await upload.read()
         if not content:
+            logger.warning(f"[submit-interview] slot {idx} has 0 bytes — skipping")
             continue
-        dest = os.path.join(session_dir, f"question_{i + 1}.webm")
-        with open(dest, "wb") as f:
-            f.write(content)
-        saved_files.append(dest)
-        logger.info(f"[submit-interview] saved recording {i + 1} → {dest} ({len(content)} bytes)")
 
-    # Persist metadata alongside the recordings
+        dest_name = f"question_{idx + 1}.webm"
+        dest_path = os.path.join(session_dir, dest_name)
+        with open(dest_path, "wb") as fh:
+            fh.write(content)
+
+        saved.append({"index": idx, "filename": dest_name, "bytes": len(content)})
+        logger.info(
+            f"[submit-interview] saved recording {idx + 1} "
+            f"→ {dest_path} ({len(content):,} bytes)"
+        )
+
+    # ── Write metadata.json ───────────────────────────────────────────────────
+    meta_out = {
+        "session_id":       session_id,
+        "difficulty":       difficulty,
+        "question_count":   question_count,
+        "questions":        questions_meta,
+        "resume_analysis":  meta.get("resume_analysis"),
+        "job_description":  meta.get("job_description"),
+        "recordings":       saved,
+        "status":           "received",
+    }
     meta_path = os.path.join(session_dir, "metadata.json")
-    with open(meta_path, "w") as f:
-        json.dump({
-            "session_id":    session_id,
-            "difficulty":    meta.get("difficulty"),
-            "question_count": meta.get("question_count"),
-            "questions":     meta.get("questions", []),
-            "resume_analysis": meta.get("resume_analysis"),
-            "job_description": meta.get("job_description"),
-            "recordings":    [os.path.basename(p) for p in saved_files],
-        }, f, indent=2)
+    with open(meta_path, "w") as fh:
+        json.dump(meta_out, fh, indent=2)
 
     logger.info(
         f"[submit-interview] session={session_id} "
-        f"recordings={len(saved_files)}/{meta.get('question_count', '?')}"
+        f"saved={len(saved)}/{question_count} recordings"
     )
-
+    logger.info(
+        f"""
+        ========== INTERVIEW SUMMARY ==========
+        Session ID        : {session_id}
+        Difficulty        : {difficulty}
+        Questions         : {question_count}
+        Files Saved       : {len(saved)}
+        Saved Files       : {[x['filename'] for x in saved]}
+        ======================================
+        """
+)
     return {
-        "session_id":      session_id,
-        "recordings_saved": len(saved_files),
-        "status":          "received",
-    }
+        "success": True,
+        "status": "received",
+        "session_id": session_id,
+        "difficulty": difficulty,
+        "question_count": question_count,
+        "recordings_saved": len(saved),
+        "received_files": [
+            item["filename"] for item in saved
+        ],
+        "received_file_sizes": [
+            item["bytes"] for item in saved
+        ],
+        "session_directory": session_dir,
+        "message": (
+            f"Interview uploaded successfully. "
+            f"Saved {len(saved)} of {question_count} recordings."
+        ),
+}
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -399,4 +435,3 @@ if __name__ == "__main__":
         port=settings.API_PORT,
         reload=settings.DEBUG
     )
-

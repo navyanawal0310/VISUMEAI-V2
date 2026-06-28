@@ -509,10 +509,10 @@ export default function InterviewPage() {
         job_description: jobDescription ?? null,
       }));
 
-      const res = await fetch("/submit-interview", {
+      const res = await fetch("http://localhost:8000/submit-interview", {
         method: "POST",
         body: form,
-      });
+        });
 
       if (!res.ok) {
         const detail = await res.text();
