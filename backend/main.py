@@ -21,6 +21,7 @@ from app.database.models import CandidateRecord  # noqa: F401 — registers the 
 from app.database import crud
 from app.services.interview_generator import InterviewGenerator
 from app.models.schemas import ResumeAnalysisResult, JobDescription, InterviewRequest
+from app.services.interview_transcriber import InterviewTranscriber
 
 # Configure logging
 logging.basicConfig(
@@ -307,31 +308,15 @@ async def submit_interview(
     metadata: str = Form(...),
     recordings: List[UploadFile] = File(default=[]),
 ):
-    """
-    Receive audio recordings and interview metadata from the frontend.
-
-    Form fields
-    -----------
-    metadata    : JSON string — difficulty, question_count, questions list,
-                  optional resume_analysis and job_description.
-    recordings  : One .webm file per question (multi-value field named
-                  "recordings"). Order matches question index.
-
-    Saves each blob to  uploads/interviews/<session_id>/question_N.webm
-    and writes a metadata.json alongside them.
-    Does NOT transcribe or evaluate — that is a future step.
-    """
     # ── Parse metadata ───────────────────────────────────────────────────────
     try:
         meta = json.loads(metadata)
     except json.JSONDecodeError as exc:
         logger.error(f"[submit-interview] invalid metadata JSON: {exc}")
         raise HTTPException(status_code=422, detail="metadata must be valid JSON")
-
     difficulty      = meta.get("difficulty", "Unknown")
     question_count  = meta.get("question_count", 0)
     questions_meta  = meta.get("questions", [])
-
     # ── Create per-session directory ─────────────────────────────────────────
     session_id  = str(uuid.uuid4())
     session_dir = os.path.join(UPLOAD_DIR, "interviews", session_id)
@@ -383,15 +368,21 @@ async def submit_interview(
     )
     logger.info(
         f"""
-        ========== INTERVIEW SUMMARY ==========
-        Session ID        : {session_id}
-        Difficulty        : {difficulty}
-        Questions         : {question_count}
-        Files Saved       : {len(saved)}
-        Saved Files       : {[x['filename'] for x in saved]}
-        ======================================
-        """
+    ========== INTERVIEW SUMMARY ==========
+    Session ID        : {session_id}
+    Difficulty        : {difficulty}
+    Questions         : {question_count}
+    Files Saved       : {len(saved)}
+    Saved Files       : {[x['filename'] for x in saved]}
+    ======================================
+    """
 )
+    transcriber = InterviewTranscriber(model_size="tiny")
+    transcripts = transcriber.transcribe_session(
+        session_path=session_dir,
+        question_count=question_count,
+    )
+
     return {
         "success": True,
         "status": "received",
@@ -411,7 +402,6 @@ async def submit_interview(
             f"Saved {len(saved)} of {question_count} recordings."
         ),
 }
-
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""

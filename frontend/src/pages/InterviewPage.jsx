@@ -492,9 +492,13 @@ export default function InterviewPage() {
       // Append each recording as a separate file field
       recordings.forEach((blob, i) => {
         if (blob) {
-          form.append(`recording_${i}`, blob, `question_${i + 1}.webm`);
+            form.append(
+                "recordings",
+                blob,
+                `question_${i + 1}.webm`
+            );
         }
-      });
+    });
 
       // Append interview metadata as JSON
       form.append("metadata", JSON.stringify({
